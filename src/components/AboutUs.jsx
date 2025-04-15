@@ -23,7 +23,7 @@ const AboutUs = () => {
                             <div className="rounded-xl overflow-hidden shadow-md">
                                 {/* Replace the src attribute with your actual image path when available */}
                                 <img
-                                    src="https://raw.githubusercontent.com/CalebTraxler/Traxler_Technology_Official/refs/heads/main/src/output.png"
+                                    src="output.png"
                                     alt="Caleb - Founder of Traxler Technology"
                                     className="w-full h-auto object-cover"
                                     onError={(e) => {
