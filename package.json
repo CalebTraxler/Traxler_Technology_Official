@@ -15,6 +15,7 @@
     "next": "^15.2.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-router-dom": "^6.20.1",
     "recharts": "^2.15.1",
     "webcam": "^3.2.1"
   },
