@@ -1,5 +1,4 @@
 
-# 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
 
 # Backend:
 # cd C:\Users\caleb\source\repos\life_ai\life_ai\backend

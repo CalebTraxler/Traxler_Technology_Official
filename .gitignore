@@ -1,6 +1,10 @@
 # APIS 
 backend/.env
 
+node_modules/
+.env
+build/
+.DS_Store
 
 # Logs
 logs
