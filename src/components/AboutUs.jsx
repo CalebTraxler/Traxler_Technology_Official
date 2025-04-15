@@ -159,8 +159,8 @@ const AboutUs = () => {
                     <div className="grid md:grid-cols-2 gap-8">
                         <div>
                             <div className="flex space-x-4 mb-4">
-                                <img src="/src/ucla_logo.png" alt="UCLA Logo" className="h-16 w-auto" />
-                                <img src="/src/uci_logo.jpg" alt="UC Irvine Logo" className="h-16 w-auto" />
+                                <img src="ucla_logo.png" alt="UCLA Logo" className="h-16 w-auto" />
+                                <img src="uci_logo.jpg" alt="UC Irvine Logo" className="h-16 w-auto" />
                             </div>
                             <h3 className="font-bold text-lg mb-2">Educational Background</h3>
                             <div className="mb-4">
