@@ -21,7 +21,7 @@ const Navbar = () => {
                 <div className="flex justify-between items-center">
                     <div className="flex items-center space-x-2">
                         <Link to="/" className="flex items-center space-x-2">
-                            <img src="public/logo.png" alt="Traxler Technology Logo" className="h-8 w-auto" />
+                            <img src="logo.png" alt="Traxler Technology Logo" className="h-8 w-auto" />
                             <span className="font-bold text-2xl tracking-tight">Traxler Technology</span>
                         </Link>
                     </div>
