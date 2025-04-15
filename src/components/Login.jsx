@@ -10,7 +10,7 @@ const Login = () => {
                 <div className="p-8">
                     <div className="text-center mb-8">
                         <div className="flex justify-center mb-4">
-                            <img src="/src/logo.png" alt="Traxler Technology Logo" className="h-16 w-auto" />
+                            <img src="logo.png" alt="Traxler Technology Logo" className="h-16 w-auto" />
                         </div>
                         <h1 className="text-2xl font-bold text-gray-900">Welcome to Traxler Technology</h1>
                         <p className="text-gray-600 mt-2">Sign in to access our Vision AI Platform</p>
