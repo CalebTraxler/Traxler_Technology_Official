@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import Webcam from 'react-webcam';
 
@@ -11,6 +12,7 @@ const WebcamCapture = () => {
     const [chatHistory, setChatHistory] = useState([]);
     const [lastCapturedImage, setLastCapturedImage] = useState(null);
     const [contextPrompt, setContextPrompt] = useState('');
+    const [cameraReady, setCameraReady] = useState(false);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
@@ -18,47 +20,79 @@ const WebcamCapture = () => {
     // API base URL - change port if needed
     const API_BASE_URL = 'http://localhost:9000';
 
-    // Helper function to convert base64 to blob
-    const base64ToBlob = async (base64Data) => {
-        // Remove the data URL prefix if it exists
-        const base64WithoutPrefix = base64Data.includes(',') 
-            ? base64Data.split(',')[1] 
-            : base64Data;
-        
-        // Decode base64
-        const byteCharacters = atob(base64WithoutPrefix);
-        const byteArrays = [];
-        
-        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-            const slice = byteCharacters.slice(offset, offset + 512);
-            
-            const byteNumbers = new Array(slice.length);
-            for (let i = 0; i < slice.length; i++) {
-                byteNumbers[i] = slice.charCodeAt(i);
-            }
-            
-            const byteArray = new Uint8Array(byteNumbers);
-            byteArrays.push(byteArray);
-        }
-        
-        return new Blob(byteArrays, { type: 'image/jpeg' });
+    // Video constraints - optimized for mobile
+    const videoConstraints = {
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        facingMode: "user",
+        aspectRatio: 1.333333, // 4:3 ratio
     };
 
-    // Check for camera permissions on component mount
-    useEffect(() => {
-        const checkPermissions = async () => {
+    // Helper function to convert base64 to blob without using fetch
+    const base64ToBlob = (base64Data) => {
+        return new Promise((resolve, reject) => {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                // Release the stream immediately
-                stream.getTracks().forEach(track => track.stop());
-            } catch (err) {
-                console.error('Camera permission error:', err);
-                setError('Camera permission denied. Please allow camera access and refresh the page.');
+                // Remove the data URL prefix
+                const base64WithoutPrefix = base64Data.split(',')[1];
+                
+                // Decode base64
+                const byteCharacters = atob(base64WithoutPrefix);
+                const byteArrays = [];
+                
+                for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+                    const slice = byteCharacters.slice(offset, offset + 512);
+                    
+                    const byteNumbers = new Array(slice.length);
+                    for (let i = 0; i < slice.length; i++) {
+                        byteNumbers[i] = slice.charCodeAt(i);
+                    }
+                    
+                    const byteArray = new Uint8Array(byteNumbers);
+                    byteArrays.push(byteArray);
+                }
+                
+                resolve(new Blob(byteArrays, { type: 'image/jpeg' }));
+            } catch (error) {
+                console.error("Error converting base64 to blob:", error);
+                reject(error);
             }
-        };
+        });
+    };
+
+    // Handle camera errors
+    const handleUserMediaError = (error) => {
+        console.error('Camera error:', error);
+        setError(`Camera error: ${error.name}. Please check permissions and try again.`);
+    };
+
+    // Handle successful webcam initialization
+    const handleUserMedia = (stream) => {
+        console.log('Camera connected successfully');
+        setCameraReady(true);
+        setError(null);
+    };
+
+    // Use direct canvas method for more reliable screenshot capture on mobile
+    const getScreenshotFromWebcam = () => {
+        if (!webcamRef.current) return null;
         
-        checkPermissions();
-    }, []);
+        try {
+            // Attempt to get a screenshot using getScreenshot method
+            return webcamRef.current.getScreenshot();
+        } catch (err) {
+            console.error("Error in getScreenshot:", err);
+            // Fallback: try to get canvas directly
+            try {
+                const canvas = webcamRef.current.getCanvas();
+                if (canvas) {
+                    return canvas.toDataURL('image/jpeg');
+                }
+            } catch (canvasErr) {
+                console.error("Canvas fallback failed:", canvasErr);
+            }
+            return null;
+        }
+    };
 
     // Function to capture and analyze image
     const captureAndAnalyze = async () => {
@@ -66,21 +100,27 @@ const WebcamCapture = () => {
             setError('Webcam not available');
             return;
         }
+        
+        if (!cameraReady) {
+            setError('Camera is not ready yet. Please wait and try again.');
+            return;
+        }
 
         setLoading(true);
         setError(null);
 
         try {
-            // Capture image
-            const imageSrc = webcamRef.current.getScreenshot();
+            // Capture image with improved method
+            const imageSrc = getScreenshotFromWebcam();
+            
             if (!imageSrc) {
-                throw new Error('Could not capture image');
+                throw new Error('Could not capture image from webcam');
             }
 
             // Save image for later use
             setLastCapturedImage(imageSrc);
 
-            // Convert base64 to blob directly (avoid fetch)
+            // Convert base64 to blob
             const blob = await base64ToBlob(imageSrc);
 
             // Prepare form data
@@ -118,7 +158,7 @@ const WebcamCapture = () => {
 
         } catch (err) {
             setError(err.message);
-            console.error('Detailed analysis error:', err);
+            console.error('Analysis error:', err);
         } finally {
             setLoading(false);
         }
@@ -142,7 +182,7 @@ const WebcamCapture = () => {
         setError(null);
 
         try {
-            // Convert image to blob using the direct method
+            // Convert image to blob
             const blob = await base64ToBlob(lastCapturedImage);
 
             // Create a FormData object for the API call
@@ -178,7 +218,7 @@ const WebcamCapture = () => {
 
         } catch (err) {
             setError(err.message);
-            console.error('Detailed chat error:', err);
+            console.error('Chat error:', err);
         } finally {
             setLoading(false);
         }
@@ -223,6 +263,10 @@ const WebcamCapture = () => {
                                             screenshotFormat="image/jpeg"
                                             className="w-full h-64 object-cover"
                                             mirrored={true}
+                                            videoConstraints={videoConstraints}
+                                            onUserMedia={handleUserMedia}
+                                            onUserMediaError={handleUserMediaError}
+                                            imageSmoothing={true}
                                         />
                                     ) : (
                                         lastCapturedImage && (
@@ -262,7 +306,7 @@ const WebcamCapture = () => {
 
                                             <button
                                                 onClick={captureAndAnalyze}
-                                                disabled={loading}
+                                                disabled={loading || !cameraReady}
                                                 className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
                                             >
                                                 {loading ? (
@@ -273,6 +317,8 @@ const WebcamCapture = () => {
                                                         </svg>
                                                         Analyzing...
                                                     </>
+                                                ) : !cameraReady ? (
+                                                    'Camera Initializing...'
                                                 ) : (
                                                     'Analyze Image'
                                                 )}
