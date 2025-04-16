@@ -18,7 +18,7 @@ const WebcamCapture = () => {
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
     // API base URL - Always use relative URL for Vercel deployments
-    const API_BASE_URL = '/api/analyze';
+    const API_BASE_URL = '/api';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
