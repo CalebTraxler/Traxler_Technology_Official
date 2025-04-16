@@ -1,4 +1,5 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+
+import React, { useRef, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
 
 const WebcamCapture = () => {
@@ -11,145 +12,80 @@ const WebcamCapture = () => {
     const [chatHistory, setChatHistory] = useState([]);
     const [lastCapturedImage, setLastCapturedImage] = useState(null);
     const [contextPrompt, setContextPrompt] = useState('');
-    const [cameraPermission, setCameraPermission] = useState(false);
-    const [facingMode, setFacingMode] = useState("user");
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
-    // API base URL - Always use relative URL for Vercel deployments
-    const API_BASE_URL = '/api/analyze';
-
-    // Detect if running on mobile
-    const [isMobile, setIsMobile] = useState(false);
-    useEffect(() => {
-        const checkMobile = () => {
-            const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-            const mobileRegex = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i;
-            setIsMobile(mobileRegex.test(userAgent));
-        };
-        checkMobile();
-    }, []);
-
-    // Optimized video constraints based on device
-    const videoConstraints = {
-        width: isMobile ? { ideal: 640, max: 1280 } : { ideal: 1280, max: 1920 },
-        height: isMobile ? { ideal: 480, max: 720 } : { ideal: 720, max: 1080 },
-        facingMode: facingMode,
-        aspectRatio: 1.3333333
-    };
-
-    // Toggle camera between front and back
-    const toggleCamera = useCallback(() => {
-        setFacingMode(prevMode => prevMode === "user" ? "environment" : "user");
-    }, []);
-
-    // Handle successful webcam access
-    const handleUserMedia = useCallback(() => {
-        console.log("Camera access granted");
-        setCameraPermission(true);
-        setError(null);
-    }, []);
-
-    // Handle webcam errors
-    const handleUserMediaError = useCallback((err) => {
-        console.error("Camera error:", err.name, err.message);
-        setCameraPermission(false);
-        setError(`Camera error: ${err.name || "unknown"}. ${err.message || "Please check browser permissions."}`);
-    }, []);
-
-    // Convert data URL to Blob for API submission
-    const dataURLtoBlob = useCallback((dataURL) => {
-        try {
-            // Convert base64/URLEncoded data component to raw binary data
-            const byteString = atob(dataURL.split(',')[1]);
-            const mimeString = dataURL.split(',')[0].split(':')[1].split(';')[0];
-            
-            // Write bytes into an ArrayBuffer
-            const arrayBuffer = new ArrayBuffer(byteString.length);
-            const uint8Array = new Uint8Array(arrayBuffer);
-            
-            for (let i = 0; i < byteString.length; i++) {
-                uint8Array[i] = byteString.charCodeAt(i);
-            }
-            
-            // Write the ArrayBuffer to a Blob and return it
-            return new Blob([arrayBuffer], { type: mimeString });
-        } catch (error) {
-            console.error("Error converting data URL to Blob:", error);
-            throw new Error("Failed to process image data");
-        }
-    }, []);
+    // API base URL - change port if needed
+    const API_BASE_URL = 'http://localhost:9000';
 
     // Function to capture and analyze image
-    const captureAndAnalyze = useCallback(async () => {
+    const captureAndAnalyze = async () => {
         if (!webcamRef.current) {
             setError('Webcam not available');
             return;
         }
-        
+
         setLoading(true);
         setError(null);
-        
+
         try {
             // Capture image
             const imageSrc = webcamRef.current.getScreenshot();
-            
             if (!imageSrc) {
-                throw new Error('Could not capture image from camera');
+                throw new Error('Could not capture image');
             }
-            
-            console.log("Image captured successfully");
-            
-            // Save image for chat mode
+
+            // Save image for later use
             setLastCapturedImage(imageSrc);
-            
-            // Convert to blob - use our dedicated function for better mobile compatibility
-            const blob = dataURLtoBlob(imageSrc);
-            
+
+            // Convert to blob
+            const response = await fetch(imageSrc);
+            const blob = await response.blob();
+
             // Prepare form data
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
-            
+
+            // If there's a context prompt, use it instead of default analysis
             if (contextPrompt.trim()) {
                 formData.append('question', contextPrompt);
             }
-            
-            // Send to API
-            console.log("Sending image to API...");
-            const response = await fetch(API_BASE_URL, {
+
+            // Send to analyze API
+            const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
                 method: 'POST',
                 body: formData
             });
-            
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
+
+            if (!apiResponse.ok) {
+                throw new Error(`Server error: ${apiResponse.status}`);
             }
-            
+
             // Parse response
-            const data = await response.json();
-            
+            const data = await apiResponse.json();
+
             if (data.error) {
                 throw new Error(data.error);
             }
-            
+
             // Update state with analysis
             setAnalysis(data.analysis);
-            
+
             // Switch to chat mode
             setChatMode(true);
             setChatHistory([]);
-            
+
         } catch (err) {
-            console.error("Error in captureAndAnalyze:", err);
-            setError(err.message || "Failed to analyze image");
+            setError(err.message);
+            console.error('Analysis error:', err);
         } finally {
             setLoading(false);
         }
-    }, [webcamRef, contextPrompt, dataURLtoBlob]);
+    };
 
     // Function to ask question about image
-    const askQuestion = useCallback(async (e) => {
+    const askQuestion = async (e) => {
         e.preventDefault();
 
         if (!question.trim()) {
@@ -167,55 +103,57 @@ const WebcamCapture = () => {
 
         try {
             // Convert image to blob
-            const blob = dataURLtoBlob(lastCapturedImage);
-            
-            // Create form data
+            const response = await fetch(lastCapturedImage);
+            const blob = await response.blob();
+
+            // Create a FormData object for the API call
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
             formData.append('question', question);
-            
-            // Send to API
-            const response = await fetch(API_BASE_URL, {
+
+            // Send to the analyze endpoint with the question
+            const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
                 method: 'POST',
                 body: formData
             });
-            
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
+
+            if (!apiResponse.ok) {
+                throw new Error(`Server error: ${apiResponse.status}`);
             }
-            
-            const data = await response.json();
-            
+
+            // Parse response
+            const data = await apiResponse.json();
+
             if (data.error) {
                 throw new Error(data.error);
             }
-            
+
             // Add to chat history
             setChatHistory(prev => [
                 ...prev,
                 { question, answer: data.analysis }
             ]);
-            
+
             // Clear question input
             setQuestion('');
-            
+
         } catch (err) {
-            console.error("Error asking question:", err);
             setError(err.message);
+            console.error('Chat error:', err);
         } finally {
             setLoading(false);
         }
-    }, [question, lastCapturedImage, dataURLtoBlob]);
+    };
 
     // Reset to capture mode
-    const resetToCapture = useCallback(() => {
+    const resetToCapture = () => {
         setChatMode(false);
         setChatHistory([]);
         setLastCapturedImage(null);
         setAnalysis('Waiting for analysis...');
         setError(null);
         setContextPrompt('');
-    }, []);
+    };
 
     return (
         <div className="bg-gray-50">
@@ -240,31 +178,13 @@ const WebcamCapture = () => {
                                 <h2 className="text-xl font-bold text-blue-900 mb-4">Image Analysis</h2>
                                 <div className="bg-black rounded-lg overflow-hidden shadow-inner">
                                     {!chatMode ? (
-                                        <div className="relative">
-                                            <Webcam
-                                                audio={false}
-                                                ref={webcamRef}
-                                                screenshotFormat="image/jpeg"
-                                                className="w-full h-64 object-cover"
-                                                mirrored={facingMode === "user"}
-                                                videoConstraints={videoConstraints}
-                                                onUserMedia={handleUserMedia}
-                                                onUserMediaError={handleUserMediaError}
-                                                forceScreenshotSourceSize={true}
-                                                screenshotQuality={0.92}
-                                            />
-                                            {isMobile && cameraPermission && (
-                                                <button 
-                                                    onClick={toggleCamera}
-                                                    className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full"
-                                                    aria-label="Switch camera"
-                                                >
-                                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4v16M8 4v16m4-16v16m4-16v16M4 4h16M4 8h16M4 12h16M4 16h16M4 20h16"></path>
-                                                    </svg>
-                                                </button>
-                                            )}
-                                        </div>
+                                        <Webcam
+                                            audio={false}
+                                            ref={webcamRef}
+                                            screenshotFormat="image/jpeg"
+                                            className="w-full h-64 object-cover"
+                                            mirrored={true}
+                                        />
                                     ) : (
                                         lastCapturedImage && (
                                             <img
@@ -303,7 +223,7 @@ const WebcamCapture = () => {
 
                                             <button
                                                 onClick={captureAndAnalyze}
-                                                disabled={loading || !cameraPermission}
+                                                disabled={loading}
                                                 className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
                                             >
                                                 {loading ? (
@@ -314,8 +234,6 @@ const WebcamCapture = () => {
                                                         </svg>
                                                         Analyzing...
                                                     </>
-                                                ) : !cameraPermission ? (
-                                                    'Camera Initializing...'
                                                 ) : (
                                                     'Analyze Image'
                                                 )}
