@@ -1,168 +1,39 @@
 
-import React, { useRef, useState, useCallback, useEffect } from 'react';
-import Webcam from 'react-webcam';
+import React, { useState } from 'react';
 
 const WebcamCapture = () => {
-    const webcamRef = useRef(null);
     const [analysis, setAnalysis] = useState('Waiting for analysis...');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [question, setQuestion] = useState('');
     const [chatMode, setChatMode] = useState(false);
     const [chatHistory, setChatHistory] = useState([]);
-    const [lastCapturedImage, setLastCapturedImage] = useState(null);
+    const [capturedImage, setCapturedImage] = useState(null);
     const [contextPrompt, setContextPrompt] = useState('');
-    const [webcamInitialized, setWebcamInitialized] = useState(false);
 
-    // Using only the Llama 4 Scout model
-    const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+    // API base URL - this should be your Vercel deployment URL or API route
+    const API_BASE_URL = '/api/analyze'; // Use relative URL for Vercel deployment
 
-    // API base URL - make sure this is correct (including HTTP/HTTPS)
-    // For mobile, you may need to use your computer's local network IP rather than localhost
-    const API_BASE_URL = 'http://localhost:9000';
-
-    // Mobile-optimized video constraints
-    const videoConstraints = {
-        width: { ideal: 640, max: 1280 },
-        height: { ideal: 480, max: 720 },
-        facingMode: "user",
-        aspectRatio: 1.3333333,
-    };
-
-    useEffect(() => {
-        // Check for mobile device
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (isMobile) {
-            console.log("Mobile device detected");
+    // Handle file input change (camera capture)
+    const handleImageCapture = async (event) => {
+        if (!event.target.files || !event.target.files[0]) {
+            setError('No image captured');
+            return;
         }
-    }, []);
 
-    // Convert a base64 string to a Blob
-    const base64ToBlob = (base64) => {
-        try {
-            // Remove data URI prefix
-            const base64Data = base64.split(',')[1];
-            // Convert base64 to raw binary data
-            const binaryString = window.atob(base64Data);
-            // Create an array buffer
-            const bytes = new Uint8Array(binaryString.length);
-            
-            // Fill the array with byte values
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            
-            // Create a blob from the array buffer
-            return new Blob([bytes], { type: 'image/jpeg' });
-        } catch (err) {
-            console.error("Error converting base64 to blob:", err);
-            throw new Error("Failed to process image data");
-        }
-    };
-
-    // Handle webcam initialization
-    const handleUserMedia = (stream) => {
-        console.log("Webcam successfully initialized");
-        setWebcamInitialized(true);
-        setError(null);
-    };
-
-    // Handle webcam errors
-    const handleUserMediaError = (err) => {
-        console.error("Webcam initialization error:", err);
-        setError(`Camera error: ${err.name || "unknown"}. Please check browser permissions.`);
-    };
-
-    // Get a screenshot with error handling
-    const getWebcamScreenshot = () => {
-        if (!webcamRef.current) return null;
-        
-        try {
-            // For debugging
-            console.log("Getting screenshot, webcam state:", 
-                        webcamRef.current.state, 
-                        "Video ready:", 
-                        webcamRef.current.video?.readyState);
-            
-            // Only try to get screenshot if video is ready
-            if (webcamRef.current.video?.readyState === 4) {
-                return webcamRef.current.getScreenshot();
-            } else {
-                throw new Error("Video not ready yet");
-            }
-        } catch (err) {
-            console.error("Error getting screenshot:", err);
-            return null;
-        }
-    };
-
-    // Wait for webcam readiness before capturing
-    const waitForWebcamReady = (maxAttempts = 10, interval = 500) => {
-        return new Promise((resolve, reject) => {
-            let attempts = 0;
-            
-            const checkReadiness = () => {
-                attempts++;
-                if (webcamRef.current?.video?.readyState === 4) {
-                    console.log("Webcam is ready for capture");
-                    resolve(true);
-                    return;
-                }
-                
-                if (attempts >= maxAttempts) {
-                    console.error("Webcam not ready after maximum attempts");
-                    reject(new Error("Webcam not ready after maximum attempts"));
-                    return;
-                }
-                
-                console.log(`Waiting for webcam... Attempt ${attempts}/${maxAttempts}`);
-                setTimeout(checkReadiness, interval);
-            };
-            
-            checkReadiness();
-        });
-    };
-
-    // Function to capture and analyze image
-    const captureAndAnalyze = async () => {
         setLoading(true);
         setError(null);
-        
+
         try {
-            if (!webcamRef.current) {
-                throw new Error("Webcam not available");
-            }
-
-            // Make sure webcam is fully initialized
-            if (!webcamInitialized) {
-                throw new Error("Camera is still initializing. Please wait a moment.");
-            }
+            const file = event.target.files[0];
             
-            console.log("Attempting to capture image...");
-
-            // Wait for webcam to be ready
-            await waitForWebcamReady();
+            // Create URL for preview
+            const imageUrl = URL.createObjectURL(file);
+            setCapturedImage(imageUrl);
             
-            // Capture image
-            const imageSrc = getWebcamScreenshot();
-            
-            if (!imageSrc) {
-                throw new Error("Failed to capture image. Please try again.");
-            }
-            
-            // Log image data for debugging (truncated)
-            console.log("Image captured successfully:", imageSrc.substring(0, 50) + "...");
-            
-            // Save image for chat mode
-            setLastCapturedImage(imageSrc);
-            
-            // Convert to blob
-            const blob = base64ToBlob(imageSrc);
-            console.log("Blob created:", blob.size, "bytes");
-            
-            // Prepare form data
+            // Create form data for API
             const formData = new FormData();
-            formData.append('file', blob, 'image.jpg');
+            formData.append('file', file);
             
             if (contextPrompt.trim()) {
                 formData.append('question', contextPrompt);
@@ -170,36 +41,29 @@ const WebcamCapture = () => {
             
             // Send to API
             console.log("Sending image to API...");
-            const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
             
-            if (!apiResponse.ok) {
-                const errorText = await apiResponse.text();
-                console.error("API error response:", errorText);
-                throw new Error(`Server error: ${apiResponse.status}. ${errorText || ''}`);
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
             }
             
-            // Parse response
-            const data = await apiResponse.json();
+            const data = await response.json();
             
             if (data.error) {
                 throw new Error(data.error);
             }
             
-            // Update state with analysis result
+            // Update UI with analysis
             setAnalysis(data.analysis);
-            
-            // Switch to chat mode
             setChatMode(true);
             setChatHistory([]);
             
-            console.log("Image analysis complete");
-            
         } catch (err) {
-            console.error("Error in captureAndAnalyze:", err);
-            setError(err.message || "Unknown error occurred");
+            console.error("Error analyzing image:", err);
+            setError(err.message || "Failed to analyze image");
         } finally {
             setLoading(false);
         }
@@ -214,7 +78,7 @@ const WebcamCapture = () => {
             return;
         }
 
-        if (!lastCapturedImage) {
+        if (!capturedImage) {
             setError('No image available');
             return;
         }
@@ -223,26 +87,30 @@ const WebcamCapture = () => {
         setError(null);
 
         try {
-            // Convert image to blob
-            const blob = base64ToBlob(lastCapturedImage);
+            // Get the file again from the input
+            const fileInput = document.getElementById('cameraInput');
+            if (!fileInput.files || !fileInput.files[0]) {
+                throw new Error('Image file not available');
+            }
             
-            // Prepare form data
+            const file = fileInput.files[0];
+            
+            // Create form data
             const formData = new FormData();
-            formData.append('file', blob, 'image.jpg');
+            formData.append('file', file);
             formData.append('question', question);
             
             // Send to API
-            const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
             
-            if (!apiResponse.ok) {
-                throw new Error(`Server error: ${apiResponse.status}`);
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
             }
             
-            // Parse response
-            const data = await apiResponse.json();
+            const data = await response.json();
             
             if (data.error) {
                 throw new Error(data.error);
@@ -258,7 +126,7 @@ const WebcamCapture = () => {
             setQuestion('');
             
         } catch (err) {
-            console.error("Error in askQuestion:", err);
+            console.error("Error asking question:", err);
             setError(err.message);
         } finally {
             setLoading(false);
@@ -269,10 +137,16 @@ const WebcamCapture = () => {
     const resetToCapture = () => {
         setChatMode(false);
         setChatHistory([]);
-        setLastCapturedImage(null);
+        setCapturedImage(null);
         setAnalysis('Waiting for analysis...');
         setError(null);
         setContextPrompt('');
+        
+        // Reset file input
+        const fileInput = document.getElementById('cameraInput');
+        if (fileInput) {
+            fileInput.value = '';
+        }
     };
 
     return (
@@ -298,22 +172,34 @@ const WebcamCapture = () => {
                                 <h2 className="text-xl font-bold text-blue-900 mb-4">Image Analysis</h2>
                                 <div className="bg-black rounded-lg overflow-hidden shadow-inner">
                                     {!chatMode ? (
-                                        <Webcam
-                                            audio={false}
-                                            ref={webcamRef}
-                                            screenshotFormat="image/jpeg"
-                                            className="w-full h-64 object-cover"
-                                            mirrored={true}
-                                            videoConstraints={videoConstraints}
-                                            onUserMedia={handleUserMedia}
-                                            onUserMediaError={handleUserMediaError}
-                                            forceScreenshotSourceSize={true}
-                                            screenshotQuality={0.92}
-                                        />
+                                        <div className="flex items-center justify-center h-64 bg-gray-800 text-white">
+                                            <div className="text-center">
+                                                <p className="mb-4">Tap the button below to take a photo</p>
+                                                
+                                                {/* Mobile-compatible file input for camera access */}
+                                                <div className="relative">
+                                                    <input 
+                                                        type="file" 
+                                                        id="cameraInput"
+                                                        accept="image/*" 
+                                                        capture="environment"
+                                                        onChange={handleImageCapture}
+                                                        className="absolute inset-0 w-full h-full opacity-0"
+                                                        disabled={loading}
+                                                    />
+                                                    <button 
+                                                        className="bg-blue-600 text-white px-6 py-3 rounded-lg shadow hover:bg-blue-700 transition"
+                                                        disabled={loading}
+                                                    >
+                                                        {loading ? "Processing..." : "Open Camera"}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
                                     ) : (
-                                        lastCapturedImage && (
+                                        capturedImage && (
                                             <img
-                                                src={lastCapturedImage}
+                                                src={capturedImage}
                                                 alt="Captured"
                                                 className="w-full h-64 object-contain"
                                             />
@@ -345,26 +231,6 @@ const WebcamCapture = () => {
                                                     </p>
                                                 </div>
                                             </div>
-
-                                            <button
-                                                onClick={captureAndAnalyze}
-                                                disabled={loading || !webcamInitialized}
-                                                className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
-                                            >
-                                                {loading ? (
-                                                    <>
-                                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                        </svg>
-                                                        Analyzing...
-                                                    </>
-                                                ) : !webcamInitialized ? (
-                                                    'Camera Initializing...'
-                                                ) : (
-                                                    'Analyze Image'
-                                                )}
-                                            </button>
                                         </>
                                     ) : (
                                         // Chat mode controls
@@ -511,7 +377,7 @@ const WebcamCapture = () => {
                     <div className="grid md:grid-cols-5 gap-4">
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">1</div>
-                            <p>Position your webcam to frame the subject</p>
+                            <p>Position your camera to frame the subject</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">2</div>
@@ -519,7 +385,7 @@ const WebcamCapture = () => {
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">3</div>
-                            <p>Click "Analyze Image" to capture</p>
+                            <p>Click "Open Camera" to capture</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">4</div>
