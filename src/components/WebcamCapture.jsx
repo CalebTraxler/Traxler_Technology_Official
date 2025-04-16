@@ -116,8 +116,7 @@ const WebcamCapture = () => {
             }
             
             // Send to API
-            console.log("Sending image to API...");
-            const response = await fetch(API_BASE_URL, {
+            const response = await fetch(`${API_BASE_URL}/analyze`, {
                 method: 'POST',
                 body: formData
             });
