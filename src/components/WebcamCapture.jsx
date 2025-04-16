@@ -18,7 +18,7 @@ const WebcamCapture = () => {
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
     // API base URL - Always use relative URL for Vercel deployments
-    const API_BASE_URL = '/api';
+    const API_BASE_URL = '/api/analyze';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
@@ -115,6 +115,8 @@ const WebcamCapture = () => {
                 formData.append('question', contextPrompt);
             }
             
+            // Send to API
+            console.log("Sending image to API...");
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
