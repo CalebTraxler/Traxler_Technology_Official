@@ -12,153 +12,194 @@ const WebcamCapture = () => {
     const [chatHistory, setChatHistory] = useState([]);
     const [lastCapturedImage, setLastCapturedImage] = useState(null);
     const [contextPrompt, setContextPrompt] = useState('');
-    const [cameraReady, setCameraReady] = useState(false);
+    const [webcamInitialized, setWebcamInitialized] = useState(false);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
-    // API base URL - change port if needed
+    // API base URL - make sure this is correct (including HTTP/HTTPS)
+    // For mobile, you may need to use your computer's local network IP rather than localhost
     const API_BASE_URL = 'http://localhost:9000';
 
-    // Video constraints - optimized for mobile
+    // Mobile-optimized video constraints
     const videoConstraints = {
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
+        width: { ideal: 640, max: 1280 },
+        height: { ideal: 480, max: 720 },
         facingMode: "user",
-        aspectRatio: 1.333333, // 4:3 ratio
+        aspectRatio: 1.3333333,
     };
 
-    // Helper function to convert base64 to blob without using fetch
-    const base64ToBlob = (base64Data) => {
-        return new Promise((resolve, reject) => {
-            try {
-                // Remove the data URL prefix
-                const base64WithoutPrefix = base64Data.split(',')[1];
-                
-                // Decode base64
-                const byteCharacters = atob(base64WithoutPrefix);
-                const byteArrays = [];
-                
-                for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-                    const slice = byteCharacters.slice(offset, offset + 512);
-                    
-                    const byteNumbers = new Array(slice.length);
-                    for (let i = 0; i < slice.length; i++) {
-                        byteNumbers[i] = slice.charCodeAt(i);
-                    }
-                    
-                    const byteArray = new Uint8Array(byteNumbers);
-                    byteArrays.push(byteArray);
-                }
-                
-                resolve(new Blob(byteArrays, { type: 'image/jpeg' }));
-            } catch (error) {
-                console.error("Error converting base64 to blob:", error);
-                reject(error);
+    useEffect(() => {
+        // Check for mobile device
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (isMobile) {
+            console.log("Mobile device detected");
+        }
+    }, []);
+
+    // Convert a base64 string to a Blob
+    const base64ToBlob = (base64) => {
+        try {
+            // Remove data URI prefix
+            const base64Data = base64.split(',')[1];
+            // Convert base64 to raw binary data
+            const binaryString = window.atob(base64Data);
+            // Create an array buffer
+            const bytes = new Uint8Array(binaryString.length);
+            
+            // Fill the array with byte values
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
             }
-        });
+            
+            // Create a blob from the array buffer
+            return new Blob([bytes], { type: 'image/jpeg' });
+        } catch (err) {
+            console.error("Error converting base64 to blob:", err);
+            throw new Error("Failed to process image data");
+        }
     };
 
-    // Handle camera errors
-    const handleUserMediaError = (error) => {
-        console.error('Camera error:', error);
-        setError(`Camera error: ${error.name}. Please check permissions and try again.`);
-    };
-
-    // Handle successful webcam initialization
+    // Handle webcam initialization
     const handleUserMedia = (stream) => {
-        console.log('Camera connected successfully');
-        setCameraReady(true);
+        console.log("Webcam successfully initialized");
+        setWebcamInitialized(true);
         setError(null);
     };
 
-    // Use direct canvas method for more reliable screenshot capture on mobile
-    const getScreenshotFromWebcam = () => {
+    // Handle webcam errors
+    const handleUserMediaError = (err) => {
+        console.error("Webcam initialization error:", err);
+        setError(`Camera error: ${err.name || "unknown"}. Please check browser permissions.`);
+    };
+
+    // Get a screenshot with error handling
+    const getWebcamScreenshot = () => {
         if (!webcamRef.current) return null;
         
         try {
-            // Attempt to get a screenshot using getScreenshot method
-            return webcamRef.current.getScreenshot();
-        } catch (err) {
-            console.error("Error in getScreenshot:", err);
-            // Fallback: try to get canvas directly
-            try {
-                const canvas = webcamRef.current.getCanvas();
-                if (canvas) {
-                    return canvas.toDataURL('image/jpeg');
-                }
-            } catch (canvasErr) {
-                console.error("Canvas fallback failed:", canvasErr);
+            // For debugging
+            console.log("Getting screenshot, webcam state:", 
+                        webcamRef.current.state, 
+                        "Video ready:", 
+                        webcamRef.current.video?.readyState);
+            
+            // Only try to get screenshot if video is ready
+            if (webcamRef.current.video?.readyState === 4) {
+                return webcamRef.current.getScreenshot();
+            } else {
+                throw new Error("Video not ready yet");
             }
+        } catch (err) {
+            console.error("Error getting screenshot:", err);
             return null;
         }
     };
 
+    // Wait for webcam readiness before capturing
+    const waitForWebcamReady = (maxAttempts = 10, interval = 500) => {
+        return new Promise((resolve, reject) => {
+            let attempts = 0;
+            
+            const checkReadiness = () => {
+                attempts++;
+                if (webcamRef.current?.video?.readyState === 4) {
+                    console.log("Webcam is ready for capture");
+                    resolve(true);
+                    return;
+                }
+                
+                if (attempts >= maxAttempts) {
+                    console.error("Webcam not ready after maximum attempts");
+                    reject(new Error("Webcam not ready after maximum attempts"));
+                    return;
+                }
+                
+                console.log(`Waiting for webcam... Attempt ${attempts}/${maxAttempts}`);
+                setTimeout(checkReadiness, interval);
+            };
+            
+            checkReadiness();
+        });
+    };
+
     // Function to capture and analyze image
     const captureAndAnalyze = async () => {
-        if (!webcamRef.current) {
-            setError('Webcam not available');
-            return;
-        }
-        
-        if (!cameraReady) {
-            setError('Camera is not ready yet. Please wait and try again.');
-            return;
-        }
-
         setLoading(true);
         setError(null);
-
+        
         try {
-            // Capture image with improved method
-            const imageSrc = getScreenshotFromWebcam();
-            
-            if (!imageSrc) {
-                throw new Error('Could not capture image from webcam');
+            if (!webcamRef.current) {
+                throw new Error("Webcam not available");
             }
 
-            // Save image for later use
+            // Make sure webcam is fully initialized
+            if (!webcamInitialized) {
+                throw new Error("Camera is still initializing. Please wait a moment.");
+            }
+            
+            console.log("Attempting to capture image...");
+
+            // Wait for webcam to be ready
+            await waitForWebcamReady();
+            
+            // Capture image
+            const imageSrc = getWebcamScreenshot();
+            
+            if (!imageSrc) {
+                throw new Error("Failed to capture image. Please try again.");
+            }
+            
+            // Log image data for debugging (truncated)
+            console.log("Image captured successfully:", imageSrc.substring(0, 50) + "...");
+            
+            // Save image for chat mode
             setLastCapturedImage(imageSrc);
-
-            // Convert base64 to blob
-            const blob = await base64ToBlob(imageSrc);
-
+            
+            // Convert to blob
+            const blob = base64ToBlob(imageSrc);
+            console.log("Blob created:", blob.size, "bytes");
+            
             // Prepare form data
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
-
-            // If there's a context prompt, use it instead of default analysis
+            
             if (contextPrompt.trim()) {
                 formData.append('question', contextPrompt);
             }
-
-            // Send to analyze API
+            
+            // Send to API
+            console.log("Sending image to API...");
             const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
                 method: 'POST',
                 body: formData
             });
-
+            
             if (!apiResponse.ok) {
-                throw new Error(`Server error: ${apiResponse.status}`);
+                const errorText = await apiResponse.text();
+                console.error("API error response:", errorText);
+                throw new Error(`Server error: ${apiResponse.status}. ${errorText || ''}`);
             }
-
+            
             // Parse response
             const data = await apiResponse.json();
-
+            
             if (data.error) {
                 throw new Error(data.error);
             }
-
-            // Update state with analysis
+            
+            // Update state with analysis result
             setAnalysis(data.analysis);
-
+            
             // Switch to chat mode
             setChatMode(true);
             setChatHistory([]);
-
+            
+            console.log("Image analysis complete");
+            
         } catch (err) {
-            setError(err.message);
-            console.error('Analysis error:', err);
+            console.error("Error in captureAndAnalyze:", err);
+            setError(err.message || "Unknown error occurred");
         } finally {
             setLoading(false);
         }
@@ -183,42 +224,42 @@ const WebcamCapture = () => {
 
         try {
             // Convert image to blob
-            const blob = await base64ToBlob(lastCapturedImage);
-
-            // Create a FormData object for the API call
+            const blob = base64ToBlob(lastCapturedImage);
+            
+            // Prepare form data
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
             formData.append('question', question);
-
-            // Send to the analyze endpoint with the question
+            
+            // Send to API
             const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
                 method: 'POST',
                 body: formData
             });
-
+            
             if (!apiResponse.ok) {
                 throw new Error(`Server error: ${apiResponse.status}`);
             }
-
+            
             // Parse response
             const data = await apiResponse.json();
-
+            
             if (data.error) {
                 throw new Error(data.error);
             }
-
+            
             // Add to chat history
             setChatHistory(prev => [
                 ...prev,
                 { question, answer: data.analysis }
             ]);
-
+            
             // Clear question input
             setQuestion('');
-
+            
         } catch (err) {
+            console.error("Error in askQuestion:", err);
             setError(err.message);
-            console.error('Chat error:', err);
         } finally {
             setLoading(false);
         }
@@ -266,7 +307,8 @@ const WebcamCapture = () => {
                                             videoConstraints={videoConstraints}
                                             onUserMedia={handleUserMedia}
                                             onUserMediaError={handleUserMediaError}
-                                            imageSmoothing={true}
+                                            forceScreenshotSourceSize={true}
+                                            screenshotQuality={0.92}
                                         />
                                     ) : (
                                         lastCapturedImage && (
@@ -306,7 +348,7 @@ const WebcamCapture = () => {
 
                                             <button
                                                 onClick={captureAndAnalyze}
-                                                disabled={loading || !cameraReady}
+                                                disabled={loading || !webcamInitialized}
                                                 className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
                                             >
                                                 {loading ? (
@@ -317,7 +359,7 @@ const WebcamCapture = () => {
                                                         </svg>
                                                         Analyzing...
                                                     </>
-                                                ) : !cameraReady ? (
+                                                ) : !webcamInitialized ? (
                                                     'Camera Initializing...'
                                                 ) : (
                                                     'Analyze Image'
