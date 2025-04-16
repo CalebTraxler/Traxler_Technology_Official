@@ -115,8 +115,7 @@ const WebcamCapture = () => {
                 formData.append('question', contextPrompt);
             }
             
-            // Send to API
-            const response = await fetch(`${API_BASE_URL}/analyze`, {
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
