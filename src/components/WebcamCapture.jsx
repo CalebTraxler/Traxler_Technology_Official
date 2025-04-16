@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import Webcam from 'react-webcam';
 
 const WebcamCapture = () => {
@@ -17,6 +17,48 @@ const WebcamCapture = () => {
 
     // API base URL - change port if needed
     const API_BASE_URL = 'http://localhost:9000';
+
+    // Helper function to convert base64 to blob
+    const base64ToBlob = async (base64Data) => {
+        // Remove the data URL prefix if it exists
+        const base64WithoutPrefix = base64Data.includes(',') 
+            ? base64Data.split(',')[1] 
+            : base64Data;
+        
+        // Decode base64
+        const byteCharacters = atob(base64WithoutPrefix);
+        const byteArrays = [];
+        
+        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+            const slice = byteCharacters.slice(offset, offset + 512);
+            
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {
+                byteNumbers[i] = slice.charCodeAt(i);
+            }
+            
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+        }
+        
+        return new Blob(byteArrays, { type: 'image/jpeg' });
+    };
+
+    // Check for camera permissions on component mount
+    useEffect(() => {
+        const checkPermissions = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                // Release the stream immediately
+                stream.getTracks().forEach(track => track.stop());
+            } catch (err) {
+                console.error('Camera permission error:', err);
+                setError('Camera permission denied. Please allow camera access and refresh the page.');
+            }
+        };
+        
+        checkPermissions();
+    }, []);
 
     // Function to capture and analyze image
     const captureAndAnalyze = async () => {
@@ -38,9 +80,8 @@ const WebcamCapture = () => {
             // Save image for later use
             setLastCapturedImage(imageSrc);
 
-            // Convert to blob
-            const response = await fetch(imageSrc);
-            const blob = await response.blob();
+            // Convert base64 to blob directly (avoid fetch)
+            const blob = await base64ToBlob(imageSrc);
 
             // Prepare form data
             const formData = new FormData();
@@ -77,7 +118,7 @@ const WebcamCapture = () => {
 
         } catch (err) {
             setError(err.message);
-            console.error('Analysis error:', err);
+            console.error('Detailed analysis error:', err);
         } finally {
             setLoading(false);
         }
@@ -101,9 +142,8 @@ const WebcamCapture = () => {
         setError(null);
 
         try {
-            // Convert image to blob
-            const response = await fetch(lastCapturedImage);
-            const blob = await response.blob();
+            // Convert image to blob using the direct method
+            const blob = await base64ToBlob(lastCapturedImage);
 
             // Create a FormData object for the API call
             const formData = new FormData();
@@ -138,7 +178,7 @@ const WebcamCapture = () => {
 
         } catch (err) {
             setError(err.message);
-            console.error('Chat error:', err);
+            console.error('Detailed chat error:', err);
         } finally {
             setLoading(false);
         }
