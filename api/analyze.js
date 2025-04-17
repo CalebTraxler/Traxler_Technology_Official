@@ -1,7 +1,7 @@
-// Import necessary libraries
-import { Groq } from "groq-sdk";
-import * as formidable from 'formidable';
-import * as fs from 'fs';
+// ES Module version for Vercel serverless function
+import { Groq } from 'groq-sdk';
+import formidable from 'formidable';
+import { readFileSync } from 'fs';
 
 // Configure environment variables
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -27,12 +27,12 @@ const parseForm = async (req) => {
 
 // Helper to read file as Base64
 const readFileAsBase64 = (filePath) => {
-    const fileBuffer = fs.readFileSync(filePath);
+    const fileBuffer = readFileSync(filePath);
     return Buffer.from(fileBuffer).toString('base64');
 };
 
 // Main serverless function handler
-export default async (req, res) => {
+export default async function handler(req, res) {
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -127,4 +127,4 @@ export default async (req, res) => {
             analysis: "Failed to analyze image"
         });
     }
-};
+}
