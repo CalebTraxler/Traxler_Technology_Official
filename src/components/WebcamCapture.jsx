@@ -15,16 +15,19 @@ const WebcamCapture = () => {
     const [cameraPermission, setCameraPermission] = useState(false);
     const [facingMode, setFacingMode] = useState("user");
     
-    // Session management with LangChain memory
+    // Session management with memory
     const [sessionId, setSessionId] = useState(null);
     const [memoryStats, setMemoryStats] = useState(null);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
-    // API base URLs
-    const VISION_API_URL = '/api/analyze'; // For Vercel deployment
-    const MEMORY_API_BASE_URL = 'http://localhost:9000'; // For LangChain memory server
+    // API base URL - Use relative path for deployment
+    // For Vercel deployments, all API calls go to the same endpoint
+    const API_BASE_URL = '/api';
+    
+    // For local development, this might be:
+    // const API_BASE_URL = 'http://localhost:9000/api';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
@@ -90,12 +93,10 @@ const WebcamCapture = () => {
         }
     }, []);
     
-    // Memory Session Management Functions
-    
     // Create a new memory session
     const createNewSession = async () => {
         try {
-            const response = await fetch(`${MEMORY_API_BASE_URL}/api/session`, {
+            const response = await fetch(`${API_BASE_URL}/session`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -126,7 +127,7 @@ const WebcamCapture = () => {
         if (!id) return;
         
         try {
-            const response = await fetch(`${MEMORY_API_BASE_URL}/api/memory/${id}`);
+            const response = await fetch(`${API_BASE_URL}/memory/${id}`);
             
             if (!response.ok) {
                 console.error(`Memory server error: ${response.status}`);
@@ -140,41 +141,12 @@ const WebcamCapture = () => {
         }
     };
     
-    // Store interaction in memory
-    const storeInMemory = async (humanMessage, aiMessage) => {
-        if (!sessionId) return;
-        
-        try {
-            const response = await fetch(`${MEMORY_API_BASE_URL}/api/memory`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    session_id: sessionId,
-                    human_message: humanMessage,
-                    ai_message: aiMessage
-                }),
-            });
-            
-            if (!response.ok) {
-                console.error(`Memory server error: ${response.status}`);
-                return;
-            }
-            
-            // Refresh memory stats
-            fetchMemoryStats();
-        } catch (err) {
-            console.error('Error storing in memory:', err);
-        }
-    };
-    
     // Clear memory for current session
     const clearMemory = async () => {
         if (!sessionId) return;
         
         try {
-            const response = await fetch(`${MEMORY_API_BASE_URL}/api/memory/${sessionId}`, {
+            const response = await fetch(`${API_BASE_URL}/memory/${sessionId}`, {
                 method: 'DELETE',
             });
             
@@ -182,6 +154,10 @@ const WebcamCapture = () => {
                 console.error(`Memory server error: ${response.status}`);
                 return;
             }
+            
+            // Reset chat history
+            setChatHistory([]);
+            setAnalysis('Memory cleared. Waiting for new analysis...');
             
             // Refresh memory stats
             fetchMemoryStats();
@@ -231,7 +207,7 @@ const WebcamCapture = () => {
             
             // Send to API
             console.log("Sending image to API...");
-            const response = await fetch(VISION_API_URL, {
+            const response = await fetch(`${API_BASE_URL}/analyze`, {
                 method: 'POST',
                 body: formData
             });
@@ -250,10 +226,15 @@ const WebcamCapture = () => {
             // Update state with analysis
             setAnalysis(data.analysis);
             
-            // Store in memory if session exists
-            if (sessionId) {
-                const humanMessage = contextPrompt.trim() || "Analyze this image";
-                storeInMemory(humanMessage, data.analysis);
+            // Update session ID if returned
+            if (data.session_id && data.session_id !== sessionId) {
+                setSessionId(data.session_id);
+                console.log(`Updated to session ID: ${data.session_id}`);
+            }
+            
+            // Refresh memory stats if session exists
+            if (sessionId || data.session_id) {
+                await fetchMemoryStats(data.session_id || sessionId);
             }
             
             // Switch to chat mode
@@ -300,7 +281,7 @@ const WebcamCapture = () => {
             }
             
             // Send to API
-            const response = await fetch(VISION_API_URL, {
+            const response = await fetch(`${API_BASE_URL}/analyze`, {
                 method: 'POST',
                 body: formData
             });
@@ -321,9 +302,15 @@ const WebcamCapture = () => {
                 { question, answer: data.analysis }
             ]);
             
-            // Store in memory if session exists
-            if (sessionId) {
-                storeInMemory(question, data.analysis);
+            // Update session ID if returned
+            if (data.session_id && data.session_id !== sessionId) {
+                setSessionId(data.session_id);
+                console.log(`Updated to session ID: ${data.session_id}`);
+            }
+            
+            // Refresh memory stats if session exists
+            if (sessionId || data.session_id) {
+                await fetchMemoryStats(data.session_id || sessionId);
             }
             
             // Clear question input
@@ -352,7 +339,7 @@ const WebcamCapture = () => {
         if (!memoryStats || !sessionId) return "Memory not available";
         
         const messageCount = memoryStats.messages ? memoryStats.messages.length : 0;
-        return `${messageCount} interactions in memory`;
+        return `${messageCount} interactions remembered`;
     };
 
     return (
