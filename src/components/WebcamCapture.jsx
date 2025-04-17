@@ -14,16 +14,12 @@ const WebcamCapture = () => {
     const [contextPrompt, setContextPrompt] = useState('');
     const [cameraPermission, setCameraPermission] = useState(false);
     const [facingMode, setFacingMode] = useState("user");
-    
-    // Session management with LangChain memory
-    const [sessionId, setSessionId] = useState(null);
-    const [memoryStats, setMemoryStats] = useState(null);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
-    // API base URL - change port if needed
-    const API_BASE_URL = 'http://localhost:9000';
+    // API base URL - Always use relative URL for Vercel deployments
+    const API_BASE_URL = '/api/analyze';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
@@ -86,157 +82,75 @@ const WebcamCapture = () => {
         }
     }, []);
 
-    // Initialize session when component loads
-    useEffect(() => {
-        createNewSession();
-    }, []);
-    
-    // Create a new session
-    const createNewSession = async () => {
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/session`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({}),
-            });
-            
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            setSessionId(data.session_id);
-            console.log(`Created new session: ${data.session_id}`);
-        } catch (err) {
-            console.error('Error creating session:', err);
-            setError('Failed to create a memory session. Please try again.');
-        }
-    };
-    
-    // Fetch memory stats
-    const fetchMemoryStats = async () => {
-        if (!sessionId) return;
-        
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/memory/${sessionId}`);
-            
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            setMemoryStats(data);
-        } catch (err) {
-            console.error('Error fetching memory stats:', err);
-        }
-    };
-    
-    // Clear memory for current session
-    const clearMemory = async () => {
-        if (!sessionId) return;
-        
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/memory/${sessionId}`, {
-                method: 'DELETE',
-            });
-            
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
-            }
-            
-            // Reset chat history
-            setChatHistory([]);
-            setAnalysis('Memory cleared. Waiting for new analysis...');
-            
-            // Refresh memory stats
-            await fetchMemoryStats();
-        } catch (err) {
-            console.error('Error clearing memory:', err);
-            setError('Failed to clear memory. Please try again.');
-        }
-    };
-
     // Function to capture and analyze image
-    const captureAndAnalyze = async () => {
+    const captureAndAnalyze = useCallback(async () => {
         if (!webcamRef.current) {
             setError('Webcam not available');
             return;
         }
-
+        
         setLoading(true);
         setError(null);
-
+        
         try {
             // Capture image
             const imageSrc = webcamRef.current.getScreenshot();
+            
             if (!imageSrc) {
                 throw new Error('Could not capture image from camera');
             }
-
-            // Save image for later use
+            
+            console.log("Image captured successfully");
+            
+            // Save image for chat mode
             setLastCapturedImage(imageSrc);
-
-            // Convert to blob using our helper function
+            
+            // Convert to blob - use our dedicated function for better mobile compatibility
             const blob = dataURLtoBlob(imageSrc);
-
+            
             // Prepare form data
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
             
-            // Add session info
-            if (sessionId) {
-                formData.append('session_id', sessionId);
-            }
-
-            // If there's a context prompt, use it instead of default analysis
             if (contextPrompt.trim()) {
                 formData.append('question', contextPrompt);
             }
-
-            // Send to analyze API
-            const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
+            
+            // Send to API
+            console.log("Sending image to API...");
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
-
-            if (!apiResponse.ok) {
-                throw new Error(`Server error: ${apiResponse.status}`);
+            
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
             }
-
+            
             // Parse response
-            const data = await apiResponse.json();
-
+            const data = await response.json();
+            
             if (data.error) {
                 throw new Error(data.error);
             }
-
-            // Update session if returned
-            if (data.session_id) {
-                setSessionId(data.session_id);
-            }
-
+            
             // Update state with analysis
             setAnalysis(data.analysis);
-
-            // Refresh memory stats
-            await fetchMemoryStats();
-
+            
             // Switch to chat mode
             setChatMode(true);
             setChatHistory([]);
-
+            
         } catch (err) {
-            setError(err.message);
-            console.error('Analysis error:', err);
+            console.error("Error in captureAndAnalyze:", err);
+            setError(err.message || "Failed to analyze image");
         } finally {
             setLoading(false);
         }
-    };
+    }, [webcamRef, contextPrompt, dataURLtoBlob]);
 
     // Function to ask question about image
-    const askQuestion = async (e) => {
+    const askQuestion = useCallback(async (e) => {
         e.preventDefault();
 
         if (!question.trim()) {
@@ -253,80 +167,56 @@ const WebcamCapture = () => {
         setError(null);
 
         try {
-            // Convert image to blob using our helper function
+            // Convert image to blob
             const blob = dataURLtoBlob(lastCapturedImage);
-
-            // Create a FormData object for the API call
+            
+            // Create form data
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
             formData.append('question', question);
             
-            // Add session info
-            if (sessionId) {
-                formData.append('session_id', sessionId);
-            }
-
-            // Send to the analyze endpoint with the question
-            const apiResponse = await fetch(`${API_BASE_URL}/api/analyze`, {
+            // Send to API
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
-
-            if (!apiResponse.ok) {
-                throw new Error(`Server error: ${apiResponse.status}`);
+            
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
             }
-
-            // Parse response
-            const data = await apiResponse.json();
-
+            
+            const data = await response.json();
+            
             if (data.error) {
                 throw new Error(data.error);
             }
-
-            // Update session if returned
-            if (data.session_id) {
-                setSessionId(data.session_id);
-            }
-
+            
             // Add to chat history
             setChatHistory(prev => [
                 ...prev,
                 { question, answer: data.analysis }
             ]);
-
-            // Refresh memory stats
-            await fetchMemoryStats();
-
+            
             // Clear question input
             setQuestion('');
-
+            
         } catch (err) {
+            console.error("Error asking question:", err);
             setError(err.message);
-            console.error('Chat error:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [question, lastCapturedImage, dataURLtoBlob]);
 
     // Reset to capture mode
-    const resetToCapture = () => {
+    const resetToCapture = useCallback(() => {
         setChatMode(false);
         setChatHistory([]);
         setLastCapturedImage(null);
         setAnalysis('Waiting for analysis...');
         setError(null);
         setContextPrompt('');
-        
-        // Don't reset the session - keep the memory
-    };
-    
-    // Format memory message count or summary
-    const getMemoryStatus = () => {
-        if (!memoryStats) return "No memory data available";
-        
-        const messageCount = memoryStats.messages ? memoryStats.messages.length : 0;
-        return `Buffer Memory: ${messageCount} messages stored`;
-    };
+    }, []);
 
     return (
         <div className="bg-gray-50">
@@ -409,49 +299,28 @@ const WebcamCapture = () => {
                                                     <p className="text-sm text-blue-800">
                                                         <span className="font-medium">Powered by:</span> Llama 4 Scout 17B
                                                     </p>
-                                                    <p className="text-xs text-blue-700 mt-1">
-                                                        <span className="font-medium">Memory:</span> Buffer Memory (remembers exact conversation details)
-                                                    </p>
-                                                    {sessionId && (
-                                                        <p className="text-xs text-blue-700 mt-1">
-                                                            <span className="font-medium">Session:</span> {sessionId.substring(0, 8)}...
-                                                        </p>
-                                                    )}
                                                 </div>
                                             </div>
 
-                                            <div className="flex gap-2">
-                                                <button
-                                                    onClick={captureAndAnalyze}
-                                                    disabled={loading || !cameraPermission}
-                                                    className="flex-1 p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
-                                                >
-                                                    {loading ? (
-                                                        <>
-                                                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                            </svg>
-                                                            Analyzing...
-                                                        </>
-                                                    ) : !cameraPermission ? (
-                                                        'Camera Initializing...'
-                                                    ) : (
-                                                        'Analyze Image'
-                                                    )}
-                                                </button>
-                                                
-                                                <button
-                                                    onClick={clearMemory}
-                                                    disabled={loading}
-                                                    className="p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:bg-gray-100 transition shadow-md"
-                                                    title="Clear memory for this session"
-                                                >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                    </svg>
-                                                </button>
-                                            </div>
+                                            <button
+                                                onClick={captureAndAnalyze}
+                                                disabled={loading || !cameraPermission}
+                                                className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
+                                            >
+                                                {loading ? (
+                                                    <>
+                                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                        </svg>
+                                                        Analyzing...
+                                                    </>
+                                                ) : !cameraPermission ? (
+                                                    'Camera Initializing...'
+                                                ) : (
+                                                    'Analyze Image'
+                                                )}
+                                            </button>
                                         </>
                                     ) : (
                                         // Chat mode controls
@@ -480,33 +349,14 @@ const WebcamCapture = () => {
                                                     )}
                                                 </button>
                                             </div>
-                                            
-                                            <div className="p-3 bg-blue-50 rounded-md border border-blue-100 mb-3">
-                                                <p className="text-xs text-blue-700">
-                                                    <span className="font-medium">Memory Status:</span> {getMemoryStatus()}
-                                                </p>
-                                            </div>
 
-                                            <div className="flex gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={resetToCapture}
-                                                    className="flex-1 p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
-                                                >
-                                                    Capture New Image
-                                                </button>
-                                                
-                                                <button
-                                                    type="button"
-                                                    onClick={clearMemory}
-                                                    className="p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
-                                                    title="Clear memory"
-                                                >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                    </svg>
-                                                </button>
-                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={resetToCapture}
+                                                className="w-full p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
+                                            >
+                                                Capture New Image
+                                            </button>
                                         </form>
                                     )}
 
@@ -548,26 +398,7 @@ const WebcamCapture = () => {
                                                 <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{analysis}</div>
                                             </div>
 
-                                            {/* Memory status indicator */}
-                                            {memoryStats && (
-                                                <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="text-sm font-semibold text-gray-700">
-                                                            <span className="text-blue-600 mr-1">
-                                                                <svg className="inline-block w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
-                                                                </svg>
-                                                            </span>
-                                                            Memory Status
-                                                        </div>
-                                                        <div className="text-xs text-gray-500">
-                                                            {`${memoryStats.messages ? memoryStats.messages.length : 0} interactions stored`}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            
-                                            {/* Conversation */}
+                                            {/* Chat messages */}
                                             {chatHistory.map((chat, index) => (
                                                 <div key={index} className="mb-6">
                                                     <div className="font-semibold text-gray-700 mb-2">You asked:</div>
@@ -615,18 +446,18 @@ const WebcamCapture = () => {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
                             </svg>
                         </div>
-                        <h3 className="text-lg font-bold mb-2">Interactive AI Chat with Memory</h3>
-                        <p className="text-gray-600">Ask questions about your images with AI that remembers previous interactions, enabling more natural and context-aware conversations.</p>
+                        <h3 className="text-lg font-bold mb-2">Interactive AI Chat</h3>
+                        <p className="text-gray-600">Ask specific questions about your images and receive concise, relevant answers from our advanced AI assistant.</p>
                     </div>
 
                     <div className="bg-white p-6 rounded-xl shadow-md">
                         <div className="text-blue-600 mb-4">
                             <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
                             </svg>
                         </div>
-                        <h3 className="text-lg font-bold mb-2">Conversation Memory</h3>
-                        <p className="text-gray-600">Our system remembers context from previous interactions, allowing for more natural follow-up questions and nuanced discussions about images.</p>
+                        <h3 className="text-lg font-bold mb-2">Secure Processing</h3>
+                        <p className="text-gray-600">Your images are processed securely with our enterprise-grade API infrastructure, ensuring privacy and data protection.</p>
                     </div>
                 </div>
 
@@ -648,16 +479,16 @@ const WebcamCapture = () => {
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">4</div>
-                            <p>Ask questions about the image</p>
+                            <p>Ask specific questions about the image</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">5</div>
-                            <p>Continue the conversation with follow-up questions</p>
+                            <p>Click "Capture New Image" to restart</p>
                         </div>
                     </div>
                     <div className="mt-6 text-center">
                         <p className="inline-block py-2 px-4 bg-blue-50 text-blue-700 rounded-full font-medium">
-                            Powered by Llama 4 Scout 17B and LangChain Memory for advanced image analysis
+                            Powered by Llama 4 Scout 17B for advanced image analysis
                         </p>
                     </div>
                 </div>
