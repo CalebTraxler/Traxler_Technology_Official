@@ -3,13 +3,20 @@ import { Groq } from 'groq-sdk';
 import formidable from 'formidable';
 import { readFileSync } from 'fs';
 
-// Configure environment variables
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-
-// Initialize Groq client
-const groqClient = new Groq({
-    apiKey: GROQ_API_KEY
-});
+// More robust API key handling
+const getGroqApiKey = () => {
+    // Try different ways to access the environment variable
+    const apiKey = process.env.GROQ_API_KEY || 
+                  process.env.NEXT_PUBLIC_GROQ_API_KEY || 
+                  process.env.VERCEL_GROQ_API_KEY;
+    
+    if (!apiKey) {
+        console.error("GROQ API KEY NOT FOUND IN ANY ENVIRONMENT VARIABLE");
+        throw new Error("GROQ API key not found in environment variables");
+    }
+    
+    return apiKey;
+};
 
 // Set Llama model
 const MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
@@ -51,6 +58,20 @@ export default async function handler(req, res) {
 
     try {
         console.log("Processing new request with Llama 4 Scout model");
+        
+        // Initialize Groq client - Only create when needed
+        let groqClient;
+        try {
+            const apiKey = getGroqApiKey();
+            console.log("API Key found, initializing Groq client");
+            groqClient = new Groq({ apiKey });
+        } catch (keyError) {
+            console.error("API Key error:", keyError.message);
+            return res.status(500).json({ 
+                error: "API key configuration error. Please check server configuration.",
+                details: keyError.message
+            });
+        }
 
         // Parse the form data
         const { fields, files } = await parseForm(req);
@@ -77,12 +98,6 @@ export default async function handler(req, res) {
         } else {
             console.log(`ANALYSIS MODE (general description)`);
             userPrompt = "Describe what you see in this image in a concise, professional manner.";
-        }
-
-        if (!groqClient) {
-            return res.status(503).json({
-                error: "Vision service is currently unavailable. Please try again later."
-            });
         }
 
         console.log("Sending request to Groq API with Llama 4 Scout model");
