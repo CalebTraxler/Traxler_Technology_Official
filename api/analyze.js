@@ -1,7 +1,7 @@
 // Import necessary libraries
-const { Groq } = require("groq-sdk");
-const formidable = require('formidable');
-const fs = require('fs');
+import { Groq } from "groq-sdk";
+import * as formidable from 'formidable';
+import * as fs from 'fs';
 
 // Configure environment variables
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -32,7 +32,7 @@ const readFileAsBase64 = (filePath) => {
 };
 
 // Main serverless function handler
-module.exports = async (req, res) => {
+export default async (req, res) => {
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
