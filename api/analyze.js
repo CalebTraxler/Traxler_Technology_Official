@@ -177,22 +177,27 @@ export async function memoryHandler(req, res) {
     
     // If this is a DELETE request, clear the memory
     if (req.method === 'DELETE') {
-        if (!sessionId || !conversationMemories[sessionId]) {
-            return res.status(404).json({
-                error: 'Session not found'
-            });
-        }
-        
-        conversationMemories[sessionId] = { messages: [] };
-        console.log(`Cleared memory for session ${sessionId}`);
-        
-        const stats = getMemoryStats(sessionId);
-        return res.status(200).json({
-            session_id: sessionId,
-            stats: stats,
-            status: 'cleared',
-            memory_type: 'buffer'
-        });
+      if (!sessionId) {
+        console.warn("No sessionId found during DELETE");
+        return res.status(400).json({ error: 'No sessionId provided' });
+      }
+
+      if (!conversationMemories[sessionId]) {
+        console.warn("Session not found in memory:", sessionId);
+        return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // 🧼 clear the memory
+      conversationMemories[sessionId] = { messages: [] };
+      console.log(`Cleared memory for session ${sessionId}`);
+
+      const stats = getMemoryStats(sessionId);
+      return res.status(200).json({
+        session_id: sessionId,
+        stats: stats,
+        status: 'cleared',
+        memory_type: 'buffer'
+      });
     }
 
     // For GET requests, get or create a session
