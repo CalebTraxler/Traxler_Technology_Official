@@ -3,6 +3,13 @@ import { Groq } from 'groq-sdk';
 import formidable from 'formidable';
 import { readFileSync } from 'fs';
 
+// MEMORY STORAGE
+// In a production app, you should use a database instead of in-memory storage
+// This example uses a simple memory store that will be reset when the serverless function restarts
+let conversationMemories = {};
+let sessionTimestamps = {};
+const SESSION_EXPIRY_SECONDS = 3600; // 1 hour
+
 // More robust API key handling
 const getGroqApiKey = () => {
     // Try different ways to access the environment variable
@@ -38,7 +45,130 @@ const readFileAsBase64 = (filePath) => {
     return Buffer.from(fileBuffer).toString('base64');
 };
 
-// Main serverless function handler
+// Get or create session
+const getOrCreateSession = (sessionId) => {
+    // Create new session if doesn't exist
+    if (!sessionId || !conversationMemories[sessionId]) {
+        sessionId = Date.now().toString(36) + Math.random().toString(36).substring(2);
+        console.log(`Creating new session: ${sessionId}`);
+        conversationMemories[sessionId] = {
+            messages: []
+        };
+    }
+    
+    // Update session timestamp
+    sessionTimestamps[sessionId] = Date.now();
+    
+    return sessionId;
+};
+
+// Add message to memory
+const addMessageToMemory = (sessionId, role, content) => {
+    if (!conversationMemories[sessionId]) {
+        console.warn(`Session ${sessionId} not found, creating new session`);
+        conversationMemories[sessionId] = { messages: [] };
+    }
+    
+    conversationMemories[sessionId].messages.push({ role, content });
+    console.log(`Added ${role} message to session ${sessionId}. Total messages: ${conversationMemories[sessionId].messages.length}`);
+    
+    return getMemoryStats(sessionId);
+};
+
+// Get memory stats
+const getMemoryStats = (sessionId) => {
+    if (!conversationMemories[sessionId]) {
+        return {
+            message_count: 0,
+            characters: 0,
+            tokens_estimate: 0
+        };
+    }
+    
+    const messages = conversationMemories[sessionId].messages;
+    const charCount = messages.reduce((sum, msg) => sum + msg.content.length, 0);
+    
+    return {
+        message_count: messages.length,
+        characters: charCount,
+        tokens_estimate: Math.floor(charCount / 4) // Rough estimate
+    };
+};
+
+// Cleanup expired sessions (can't use this in serverless but good practice)
+const cleanupExpiredSessions = () => {
+    const now = Date.now();
+    Object.keys(sessionTimestamps).forEach(sessionId => {
+        if (now - sessionTimestamps[sessionId] > SESSION_EXPIRY_SECONDS * 1000) {
+            console.log(`Cleaning up expired session: ${sessionId}`);
+            delete conversationMemories[sessionId];
+            delete sessionTimestamps[sessionId];
+        }
+    });
+};
+
+// Handler for memory endpoint
+export async function memoryHandler(req, res) {
+    // Set CORS headers
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+
+    // Handle OPTIONS method (preflight request)
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+
+    // Parse cookies for session_id
+    const cookies = req.headers.cookie?.split(';').reduce((acc, cookie) => {
+        const [key, value] = cookie.trim().split('=');
+        acc[key] = value;
+        return acc;
+    }, {}) || {};
+    
+    let sessionId = cookies.session_id;
+    
+    // Check for session_id in query params
+    if (req.query.session_id) {
+        sessionId = req.query.session_id;
+    }
+    
+    // If this is a DELETE request, clear the memory
+    if (req.method === 'DELETE') {
+        if (!sessionId || !conversationMemories[sessionId]) {
+            return res.status(404).json({
+                error: 'Session not found'
+            });
+        }
+        
+        conversationMemories[sessionId] = { messages: [] };
+        console.log(`Cleared memory for session ${sessionId}`);
+        
+        const stats = getMemoryStats(sessionId);
+        return res.status(200).json({
+            session_id: sessionId,
+            stats: stats,
+            status: 'cleared'
+        });
+    }
+
+    // For GET requests, get or create a session
+    sessionId = getOrCreateSession(sessionId);
+    
+    // Set the session cookie
+    res.setHeader('Set-Cookie', `session_id=${sessionId}; Max-Age=${SESSION_EXPIRY_SECONDS}; Path=/; HttpOnly`);
+    
+    const stats = getMemoryStats(sessionId);
+    return res.status(200).json({
+        session_id: sessionId,
+        stats: stats,
+        status: 'active',
+        memory_type: 'buffer'
+    });
+}
+
+// Main handler for analyze endpoint
 export default async function handler(req, res) {
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Credentials', true);
@@ -77,6 +207,13 @@ export default async function handler(req, res) {
         const { fields, files } = await parseForm(req);
         const file = files.file;
         const question = fields.question;
+        
+        // Get session ID from cookie or form
+        let sessionId = req.cookies?.session_id || fields.session_id;
+        sessionId = getOrCreateSession(sessionId);
+        
+        // Set the session cookie
+        res.setHeader('Set-Cookie', `session_id=${sessionId}; Max-Age=${SESSION_EXPIRY_SECONDS}; Path=/; HttpOnly`);
 
         if (!file) {
             return res.status(400).json({ error: 'No image file provided' });
@@ -90,14 +227,27 @@ export default async function handler(req, res) {
         // Create data URL for image
         const frameData = `data:${file.mimetype};base64,${imgBase64}`;
 
+        // Get conversation history from memory
+        let memoryContext = "";
+        if (conversationMemories[sessionId] && conversationMemories[sessionId].messages.length > 0) {
+            const recentMessages = conversationMemories[sessionId].messages.slice(-5);
+            memoryContext = "\nRecent conversation history:\n";
+            recentMessages.forEach(msg => {
+                memoryContext += `${msg.role}: ${msg.content}\n`;
+            });
+        }
+
         // Prepare the prompt based on whether a question was asked
         let userPrompt;
         if (question) {
             console.log(`QUESTION MODE: '${question}'`);
-            userPrompt = `Question about this image: ${question}\nPlease respond concisely but completely in one short sentence.`;
+            userPrompt = `Question about this image: ${question}\nPlease respond concisely but completely.${memoryContext}`;
+            
+            // Add user question to memory
+            addMessageToMemory(sessionId, 'user', question);
         } else {
             console.log(`ANALYSIS MODE (general description)`);
-            userPrompt = "Describe what you see in this image in a concise, professional manner.";
+            userPrompt = `Describe what you see in this image in a concise, professional manner.${memoryContext}`;
         }
 
         console.log("Sending request to Groq API with Llama 4 Scout model");
@@ -121,7 +271,7 @@ export default async function handler(req, res) {
                 }
             ],
             model: MODEL,  // Use the Llama 4 Scout model
-            max_tokens: question ? 50 : 75,  // Adjusted token limits
+            max_tokens: question ? 75 : 100,  // Adjusted token limits
             temperature: question ? 0.2 : 0.7,  // Adjusted temperature
         });
 
@@ -131,9 +281,20 @@ export default async function handler(req, res) {
 
         console.log(`Response received | Time: ${processingTime.toFixed(2)}s`);
         console.log(`Analysis complete | Response: '${analysis}'`);
+        
+        // Add AI response to memory
+        addMessageToMemory(sessionId, 'ai', analysis);
+        
+        // Get memory stats
+        const memoryStats = getMemoryStats(sessionId);
 
-        // Return analysis
-        return res.status(200).json({ analysis });
+        // Return analysis with session and memory information
+        return res.status(200).json({ 
+            analysis, 
+            session_id: sessionId,
+            memory_stats: memoryStats,
+            memory_type: 'buffer'
+        });
 
     } catch (error) {
         console.error(`Unhandled exception: ${error.message}`);
