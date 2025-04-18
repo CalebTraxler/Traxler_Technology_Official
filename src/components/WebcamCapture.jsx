@@ -14,12 +14,27 @@ const WebcamCapture = () => {
     const [contextPrompt, setContextPrompt] = useState('');
     const [cameraPermission, setCameraPermission] = useState(false);
     const [facingMode, setFacingMode] = useState("user");
+    
+    // Memory-related state
+    const [sessionId, setSessionId] = useState(null);
+    const [memoryType, setMemoryType] = useState('buffer'); // 'buffer' or 'summary'
+    const [memoryStats, setMemoryStats] = useState({
+        message_count: 0,
+        characters: 0,
+        tokens_estimate: 0,
+        memory_type: 'buffer',
+        moving_summary_buffer: null,
+        messages: []
+    });
+    const [isMemoryClearing, setIsMemoryClearing] = useState(false);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
     // API base URL - Always use relative URL for Vercel deployments
     const API_BASE_URL = '/api/analyze';
+    const MEMORY_API_URL = '/api/memory';
+    const SESSION_API_URL = '/api/session';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
@@ -31,6 +46,103 @@ const WebcamCapture = () => {
         };
         checkMobile();
     }, []);
+
+    // Create a new session when component mounts
+    useEffect(() => {
+        createNewSession();
+    }, []);
+
+    // Create a new session with the selected memory type
+    const createNewSession = async () => {
+        try {
+            const response = await fetch(SESSION_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    memory_type: memoryType,
+                }),
+                credentials: 'include'  // For cookies
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                setSessionId(data.session_id);
+                setMemoryType(data.memory_type);
+                console.log(`Created new session: ${data.session_id} with memory type: ${data.memory_type}`);
+                
+                // Initialize memory stats
+                fetchMemoryStats(data.session_id);
+            } else {
+                console.error("Failed to create session:", await response.text());
+                setError("Failed to initialize memory session. Using temporary memory instead.");
+            }
+        } catch (err) {
+            console.error('Error creating session:', err);
+            setError('Failed to create a memory session. Please try again.');
+        }
+    };
+
+    // Handle memory type change
+    const handleMemoryTypeChange = (newType) => {
+        if (newType !== memoryType) {
+            setMemoryType(newType);
+            createNewSession();
+            setChatHistory([]);
+            setAnalysis('Memory type changed. Waiting for new analysis...');
+        }
+    };
+
+    // Fetch memory stats 
+    const fetchMemoryStats = async (sid = null) => {
+        const currentSessionId = sid || sessionId;
+        if (!currentSessionId) return;
+        
+        try {
+            const response = await fetch(`${MEMORY_API_URL}/${currentSessionId}`, {
+                credentials: 'include'  // For cookies
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                setMemoryStats(data.stats);
+            } else {
+                console.error("Failed to fetch memory stats:", await response.text());
+            }
+        } catch (err) {
+            console.error('Error fetching memory stats:', err);
+        }
+    };
+
+    // Handler for clearing memory
+    const handleClearMemory = async () => {
+        if (!sessionId) return;
+        
+        setIsMemoryClearing(true);
+        try {
+            const response = await fetch(`${MEMORY_API_URL}/${sessionId}`, {
+                method: 'DELETE',
+                credentials: 'include'  // For cookies
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                setMemoryStats(data.stats);
+                console.log("Memory cleared for session:", data.session_id);
+                
+                // Also clear chat history in the UI
+                setChatHistory([]);
+                setAnalysis('Memory cleared. Start a new conversation.');
+            } else {
+                setError("Failed to clear memory: " + (await response.text()));
+            }
+        } catch (err) {
+            setError("Error clearing memory: " + err.message);
+        } finally {
+            setIsMemoryClearing(false);
+        }
+    };
 
     // Optimized video constraints based on device
     const videoConstraints = {
@@ -112,6 +224,12 @@ const WebcamCapture = () => {
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
             
+            // Add session info if available
+            if (sessionId) {
+                formData.append('session_id', sessionId);
+                formData.append('memory_type', memoryType);
+            }
+            
             if (contextPrompt.trim()) {
                 formData.append('question', contextPrompt);
             }
@@ -120,7 +238,8 @@ const WebcamCapture = () => {
             console.log("Sending image to API...");
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
-                body: formData
+                body: formData,
+                credentials: 'include'  // Important for cookies
             });
             
             if (!response.ok) {
@@ -137,9 +256,32 @@ const WebcamCapture = () => {
             // Update state with analysis
             setAnalysis(data.analysis);
             
+            // Update session and memory stats if provided
+            if (data.session_id) {
+                setSessionId(data.session_id);
+            }
+            
+            if (data.memory_type) {
+                setMemoryType(data.memory_type);
+            }
+            
+            if (data.memory_stats) {
+                setMemoryStats(data.memory_stats);
+            }
+            
             // Switch to chat mode
             setChatMode(true);
-            setChatHistory([]);
+            
+            // Initialize chat history with the first analysis 
+            if (contextPrompt.trim()) {
+                setChatHistory([{ 
+                    type: 'context',
+                    prompt: contextPrompt,
+                    answer: data.analysis 
+                }]);
+            } else {
+                setChatHistory([]);
+            }
             
         } catch (err) {
             console.error("Error in captureAndAnalyze:", err);
@@ -147,7 +289,7 @@ const WebcamCapture = () => {
         } finally {
             setLoading(false);
         }
-    }, [webcamRef, contextPrompt, dataURLtoBlob]);
+    }, [webcamRef, contextPrompt, dataURLtoBlob, API_BASE_URL, sessionId, memoryType]);
 
     // Function to ask question about image
     const askQuestion = useCallback(async (e) => {
@@ -175,10 +317,17 @@ const WebcamCapture = () => {
             formData.append('file', blob, 'image.jpg');
             formData.append('question', question);
             
-            // Send to API
+            // Add session info if available
+            if (sessionId) {
+                formData.append('session_id', sessionId);
+                formData.append('memory_type', memoryType);
+            }
+            
+            // Send to API with credentials for session cookies
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
-                body: formData
+                body: formData,
+                credentials: 'include'
             });
             
             if (!response.ok) {
@@ -191,10 +340,23 @@ const WebcamCapture = () => {
                 throw new Error(data.error);
             }
             
+            // Update session and memory stats if provided
+            if (data.session_id) {
+                setSessionId(data.session_id);
+            }
+            
+            if (data.memory_type) {
+                setMemoryType(data.memory_type);
+            }
+            
+            if (data.memory_stats) {
+                setMemoryStats(data.memory_stats);
+            }
+            
             // Add to chat history
             setChatHistory(prev => [
                 ...prev,
-                { question, answer: data.analysis }
+                { type: 'qa', question, answer: data.analysis }
             ]);
             
             // Clear question input
@@ -206,7 +368,7 @@ const WebcamCapture = () => {
         } finally {
             setLoading(false);
         }
-    }, [question, lastCapturedImage, dataURLtoBlob]);
+    }, [question, lastCapturedImage, dataURLtoBlob, API_BASE_URL, sessionId, memoryType]);
 
     // Reset to capture mode
     const resetToCapture = useCallback(() => {
@@ -216,7 +378,27 @@ const WebcamCapture = () => {
         setAnalysis('Waiting for analysis...');
         setError(null);
         setContextPrompt('');
+        // Note: We don't clear the memory/session when resetting to capture mode
     }, []);
+
+    // Format number with commas for display
+    const formatNumber = (num) => {
+        return new Intl.NumberFormat().format(num);
+    };
+    
+    // Format memory status display based on the memory type
+    const getMemoryStatus = () => {
+        if (!memoryStats) return "No memory data";
+        
+        if (memoryStats.memory_type === 'buffer') {
+            return `${memoryStats.message_count} messages stored (${formatNumber(memoryStats.tokens_estimate)} tokens)`;
+        } else {
+            // Summary memory
+            return memoryStats.moving_summary_buffer 
+                ? `Summary: "${memoryStats.moving_summary_buffer.substring(0, 50)}..."`
+                : "No conversation summary yet";
+        }
+    };
 
     return (
         <div className="bg-gray-50">
@@ -225,8 +407,31 @@ const WebcamCapture = () => {
                 <div className="max-w-6xl mx-auto px-4 text-center">
                     <h1 className="text-4xl font-bold mb-4">Vision AI Platform</h1>
                     <p className="text-xl mb-8 max-w-3xl mx-auto">
-                        Experience real-time image analysis powered by cutting-edge AI. Capture, analyze, and interact with visual content instantly.
+                        Experience real-time image analysis powered by cutting-edge AI with conversation memory.
                     </p>
+                    <div className="inline-flex bg-blue-800 rounded-lg p-1 mb-4">
+                        <button 
+                            onClick={() => handleMemoryTypeChange('buffer')}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition ${memoryType === 'buffer' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'text-blue-200 hover:bg-blue-700'}`}
+                        >
+                            Buffer Memory
+                        </button>
+                        <button 
+                            onClick={() => handleMemoryTypeChange('summary')}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition ${memoryType === 'summary' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'text-blue-200 hover:bg-blue-700'}`}
+                        >
+                            Summary Memory
+                        </button>
+                    </div>
+                    {sessionId && (
+                        <div className="inline-flex bg-blue-800 px-4 py-2 rounded-full text-xs font-medium">
+                            Session ID: {sessionId.substring(0, 8)}...
+                        </div>
+                    )}
                 </div>
             </section>
 
@@ -299,28 +504,53 @@ const WebcamCapture = () => {
                                                     <p className="text-sm text-blue-800">
                                                         <span className="font-medium">Powered by:</span> Llama 4 Scout 17B
                                                     </p>
+                                                    <p className="text-xs text-blue-700 mt-1">
+                                                        <span className="font-medium">Memory Type:</span> {memoryType === 'buffer' 
+                                                            ? 'Buffer Memory (detailed conversation history)' 
+                                                            : 'Summary Memory (conversation themes)'}
+                                                    </p>
                                                 </div>
                                             </div>
 
-                                            <button
-                                                onClick={captureAndAnalyze}
-                                                disabled={loading || !cameraPermission}
-                                                className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
-                                            >
-                                                {loading ? (
-                                                    <>
-                                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={captureAndAnalyze}
+                                                    disabled={loading || !cameraPermission}
+                                                    className="flex-1 p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
+                                                >
+                                                    {loading ? (
+                                                        <>
+                                                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                            </svg>
+                                                            Analyzing...
+                                                        </>
+                                                    ) : !cameraPermission ? (
+                                                        'Camera Initializing...'
+                                                    ) : (
+                                                        'Analyze Image'
+                                                    )}
+                                                </button>
+                                                
+                                                <button
+                                                    onClick={handleClearMemory}
+                                                    disabled={loading || isMemoryClearing || !sessionId || memoryStats.message_count === 0}
+                                                    className="p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:bg-gray-100 disabled:text-gray-400 transition shadow-md flex items-center justify-center"
+                                                    title="Clear memory for this session"
+                                                >
+                                                    {isMemoryClearing ? (
+                                                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                                         </svg>
-                                                        Analyzing...
-                                                    </>
-                                                ) : !cameraPermission ? (
-                                                    'Camera Initializing...'
-                                                ) : (
-                                                    'Analyze Image'
-                                                )}
-                                            </button>
+                                                    ) : (
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                        </svg>
+                                                    )}
+                                                </button>
+                                            </div>
                                         </>
                                     ) : (
                                         // Chat mode controls
@@ -349,14 +579,42 @@ const WebcamCapture = () => {
                                                     )}
                                                 </button>
                                             </div>
+                                            
+                                            <div className="p-3 bg-blue-50 rounded-md border border-blue-100 mb-3">
+                                                <p className="text-xs flex items-center justify-between">
+                                                    <span className="font-medium text-blue-700">Memory Status:</span>
+                                                    <span className="text-blue-600">{getMemoryStatus()}</span>
+                                                </p>
+                                            </div>
 
-                                            <button
-                                                type="button"
-                                                onClick={resetToCapture}
-                                                className="w-full p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
-                                            >
-                                                Capture New Image
-                                            </button>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={resetToCapture}
+                                                    className="flex-1 p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
+                                                >
+                                                    Capture New Image
+                                                </button>
+                                                
+                                                <button
+                                                    type="button"
+                                                    onClick={handleClearMemory}
+                                                    disabled={isMemoryClearing || !sessionId || memoryStats.message_count === 0}
+                                                    className="flex-1 p-3 bg-red-100 text-red-700 rounded-md hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 transition shadow-sm flex items-center justify-center"
+                                                >
+                                                    {isMemoryClearing ? (
+                                                        <svg className="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                        </svg>
+                                                    ) : (
+                                                        <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                                        </svg>
+                                                    )}
+                                                    Clear Memory
+                                                </button>
+                                            </div>
                                         </form>
                                     )}
 
@@ -375,31 +633,68 @@ const WebcamCapture = () => {
 
                             {/* Right column - Results */}
                             <div className="md:w-1/2">
+                                {/* Memory stats display - always visible */}
+                                <div className="mb-4 flex justify-between items-center">
+                                    <h2 className="text-xl font-bold text-blue-900">
+                                        {!chatMode ? "Analysis Results" : "Conversation"}
+                                    </h2>
+                                    
+                                    {/* Memory status indicator */}
+                                    <div className="flex items-center bg-gray-100 py-1 px-3 rounded-full text-xs">
+                                        <div className={`w-2 h-2 rounded-full mr-2 ${memoryStats.message_count > 0 ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                                        <div className="flex flex-col">
+                                            <span className="font-medium">{memoryType === 'buffer' ? 'Buffer' : 'Summary'} Memory</span>
+                                            <span className="text-gray-500">
+                                                {memoryType === 'buffer'
+                                                    ? `${memoryStats.message_count} messages`
+                                                    : memoryStats.moving_summary_buffer ? 'Active' : 'Inactive'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
                                 {!chatMode ? (
                                     // Analysis results
                                     <>
-                                        <h2 className="text-xl font-bold text-blue-900 mb-4">Analysis Results</h2>
                                         <div className="bg-gray-50 p-5 rounded-lg h-64 overflow-y-auto whitespace-pre-line border border-gray-200 shadow-inner">
                                             {analysis}
                                         </div>
                                     </>
                                 ) : (
-                                    // Chat history
+                                    // Chat history with memory context
                                     <>
-                                        <h2 className="text-xl font-bold text-blue-900 mb-4">Conversation</h2>
                                         <div className="bg-gray-50 p-5 rounded-lg h-96 overflow-y-auto border border-gray-200 shadow-inner">
-                                            {/* Initial analysis */}
-                                            <div className="mb-6">
-                                                <div className="font-semibold text-blue-700 mb-2">
-                                                    {contextPrompt
-                                                        ? <span>AI Response to: <i>"{contextPrompt}"</i></span>
-                                                        : "AI Analysis:"}
+                                            {/* Memory indicator */}
+                                            {memoryStats.message_count > 0 && (
+                                                <div className="mb-4 p-2 bg-blue-50 border border-blue-100 rounded-md">
+                                                    <p className="text-xs text-blue-700 flex items-center">
+                                                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                                        </svg>
+                                                        {memoryType === 'buffer' 
+                                                            ? `AI has memory of this conversation (${memoryStats.message_count} messages)`
+                                                            : `AI is maintaining a summary of this conversation`}
+                                                    </p>
                                                 </div>
-                                                <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{analysis}</div>
-                                            </div>
+                                            )}
+                                        
+                                            {/* Initial analysis */}
+                                            {chatHistory.length > 0 && chatHistory[0].type === 'context' ? (
+                                                <div className="mb-6">
+                                                    <div className="font-semibold text-blue-700 mb-2">
+                                                        <span>AI Response to: <i>"{chatHistory[0].prompt}"</i></span>
+                                                    </div>
+                                                    <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{chatHistory[0].answer}</div>
+                                                </div>
+                                            ) : (
+                                                <div className="mb-6">
+                                                    <div className="font-semibold text-blue-700 mb-2">AI Analysis:</div>
+                                                    <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{analysis}</div>
+                                                </div>
+                                            )}
 
                                             {/* Chat messages */}
-                                            {chatHistory.map((chat, index) => (
+                                            {chatHistory.filter(chat => chat.type === 'qa').map((chat, index) => (
                                                 <div key={index} className="mb-6">
                                                     <div className="font-semibold text-gray-700 mb-2">You asked:</div>
                                                     <div className="bg-gray-100 p-3 rounded-lg mb-3">{chat.question}</div>
@@ -443,55 +738,196 @@ const WebcamCapture = () => {
                     <div className="bg-white p-6 rounded-xl shadow-md">
                         <div className="text-blue-600 mb-4">
                             <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
                             </svg>
                         </div>
-                        <h3 className="text-lg font-bold mb-2">Interactive AI Chat</h3>
-                        <p className="text-gray-600">Ask specific questions about your images and receive concise, relevant answers from our advanced AI assistant.</p>
+                        <h3 className="text-lg font-bold mb-2">Dual Memory Options</h3>
+                        <p className="text-gray-600">Choose between Buffer Memory for precise conversation recall or Summary Memory for maintaining themes across multiple images.</p>
                     </div>
 
                     <div className="bg-white p-6 rounded-xl shadow-md">
                         <div className="text-blue-600 mb-4">
                             <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                             </svg>
                         </div>
-                        <h3 className="text-lg font-bold mb-2">Secure Processing</h3>
-                        <p className="text-gray-600">Your images are processed securely with our enterprise-grade API infrastructure, ensuring privacy and data protection.</p>
+                        <h3 className="text-lg font-bold mb-2">Session Management</h3>
+                        <p className="text-gray-600">Your conversation persists throughout your session with secure memory handling and the ability to clear history when needed.</p>
+                    </div>
+                </div>
+
+                {/* Memory Types Explanation */}
+                <div className="mt-12 bg-white rounded-xl shadow-md p-8">
+                    <h2 className="text-2xl font-bold text-blue-900 mb-6">Memory Types Explained</h2>
+                    <div className="grid md:grid-cols-2 gap-8">
+                        <div className="bg-blue-50 p-6 rounded-lg">
+                            <h3 className="text-lg font-bold text-blue-800 mb-3 flex items-center">
+                                <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                                </svg>
+                                Buffer Memory
+                            </h3>
+                            <p className="text-blue-700 mb-4">Stores the complete history of your conversation, enabling the AI to recall specific details from all previous interactions.</p>
+                            
+                            <h4 className="font-semibold text-blue-800 mb-2">Best for:</h4>
+                            <ul className="list-disc pl-5 text-blue-700 space-y-1">
+                                <li>Short to medium conversations</li>
+                                <li>When specific details matter</li>
+                                <li>Precise recall of previous questions</li>
+                                <li>Interactive QA about specific images</li>
+                            </ul>
+                        </div>
+                        
+                        <div className="bg-indigo-50 p-6 rounded-lg">
+                            <h3 className="text-lg font-bold text-indigo-800 mb-3 flex items-center">
+                                <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
+                                </svg>
+                                Summary Memory
+                            </h3>
+                            <p className="text-indigo-700 mb-4">Creates ongoing summaries of conversations, focusing on key themes and insights rather than storing every detail.</p>
+                            
+                            <h4 className="font-semibold text-indigo-800 mb-2">Best for:</h4>
+                            <ul className="list-disc pl-5 text-indigo-700 space-y-1">
+                                <li>Longer conversations across multiple images</li>
+                                <li>When overall context matters more than specifics</li>
+                                <li>More efficient token usage</li>
+                                <li>Thematic analysis across a session</li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <h4 className="font-semibold text-gray-700 mb-2">Advanced Memory Features:</h4>
+                        <ul className="grid md:grid-cols-3 gap-4">
+                            <li className="flex items-start">
+                                <svg className="w-5 h-5 text-blue-500 mr-2 mt-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                <span>Switch memory types mid-session</span>
+                            </li>
+                            <li className="flex items-start">
+                                <svg className="w-5 h-5 text-blue-500 mr-2 mt-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                <span>Memory statistics visualization</span>
+                            </li>
+                            <li className="flex items-start">
+                                <svg className="w-5 h-5 text-blue-500 mr-2 mt-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                <span>One-click memory clearing</span>
+                            </li>
+                        </ul>
                     </div>
                 </div>
 
                 {/* How to Use Section */}
                 <div className="mt-12 bg-white rounded-xl shadow-md p-8">
-                    <h2 className="text-2xl font-bold text-blue-900 mb-6">How to Use Traxler Vision AI</h2>
+                    <h2 className="text-2xl font-bold text-blue-900 mb-6">How to Use Traxler Vision AI with Memory</h2>
                     <div className="grid md:grid-cols-5 gap-4">
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">1</div>
-                            <p>Position your webcam to frame the subject</p>
+                            <p>Choose a memory type at the top (Buffer or Summary)</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">2</div>
-                            <p>Add an optional context prompt</p>
+                            <p>Position your webcam to frame the subject</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">3</div>
-                            <p>Click "Analyze Image" to capture</p>
+                            <p>Continue the conversation with follow-up questions</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">4</div>
-                            <p>Ask specific questions about the image</p>
+                            <p>AI remembers previous context in your session</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">5</div>
-                            <p>Click "Capture New Image" to restart</p>
+                            <p>Clear memory if needed or start fresh</p>
                         </div>
                     </div>
-                    <div className="mt-6 text-center">
-                        <p className="inline-block py-2 px-4 bg-blue-50 text-blue-700 rounded-full font-medium">
-                            Powered by Llama 4 Scout 17B for advanced image analysis
-                        </p>
+                </div>
+                
+                {/* Session Information */}
+                <div className="mt-8 bg-white rounded-xl shadow-md p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-xl font-bold text-blue-900">Session Information</h2>
+                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                            {sessionId ? `Active: ${sessionId.substring(0, 8)}...` : 'No active session'}
+                        </span>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-3 gap-4">
+                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <h3 className="font-medium text-gray-700 mb-2">Memory Stats</h3>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Type:</span>
+                                <span className="font-medium capitalize">{memoryType}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Messages:</span>
+                                <span className="font-medium">{memoryStats.message_count}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Tokens (est.):</span>
+                                <span className="font-medium">{formatNumber(memoryStats.tokens_estimate)}</span>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <h3 className="font-medium text-gray-700 mb-2">Session Status</h3>
+                            <div className="flex items-center">
+                                <div className={`w-3 h-3 rounded-full mr-2 ${sessionId ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                                <span>{sessionId ? 'Active' : 'Not Started'}</span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-2">
+                                Sessions automatically expire after 1 hour of inactivity
+                            </p>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <h3 className="font-medium text-gray-700 mb-2">Memory Controls</h3>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button 
+                                    onClick={() => handleMemoryTypeChange('buffer')}
+                                    disabled={memoryType === 'buffer'}
+                                    className={`p-2 rounded-md text-xs font-medium transition ${
+                                        memoryType === 'buffer'
+                                            ? 'bg-blue-100 text-blue-700 cursor-default'
+                                            : 'bg-gray-200 hover:bg-blue-100 text-gray-700 hover:text-blue-700'
+                                    }`}
+                                >
+                                    Switch to Buffer
+                                </button>
+                                <button 
+                                    onClick={() => handleMemoryTypeChange('summary')}
+                                    disabled={memoryType === 'summary'}
+                                    className={`p-2 rounded-md text-xs font-medium transition ${
+                                        memoryType === 'summary'
+                                            ? 'bg-indigo-100 text-indigo-700 cursor-default'
+                                            : 'bg-gray-200 hover:bg-indigo-100 text-gray-700 hover:text-indigo-700'
+                                    }`}
+                                >
+                                    Switch to Summary
+                                </button>
+                                <button 
+                                    onClick={handleClearMemory}
+                                    disabled={isMemoryClearing || !sessionId || memoryStats.message_count === 0}
+                                    className="col-span-2 p-2 mt-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 transition"
+                                >
+                                    Clear All Memory
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
+                
+                {/* Footer */}
+                <footer className="mt-12 text-center text-gray-500 text-sm pb-8">
+                    <p>Powered by Llama 4 Scout 17B Vision Model with LangChain Memory Management</p>
+                    <p className="mt-1">© {new Date().getFullYear()} Traxler Technology</p>
+                </footer>
             </main>
         </div>
     );
