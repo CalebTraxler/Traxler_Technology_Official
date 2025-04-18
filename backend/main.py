@@ -147,7 +147,7 @@ class AnalysisResponse(BaseModel):
 async def root():
     return {
         "status": "online",
-        "message": "Traxler Vision API is operational with dual memory management",
+        "message": "Traxler Vision API is operational with memory management",
         "version": "1.2.0"
     }
 
@@ -277,7 +277,22 @@ def get_memory_stats(session_id: str) -> MemoryStats:
 # No model selection function - using only Llama 4 Scout model
 MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# Get session memory endpoint
+# NEW ENDPOINT: Get memory from cookie-based session
+@app.get("/api/memory", response_model=MemoryResponse)
+async def get_session_memory(session_info: dict = Depends(get_session_id)):
+    session_id = session_info["session_id"]
+    memory_type = session_info["memory_type"]
+    
+    stats = get_memory_stats(session_id)
+    
+    return MemoryResponse(
+        session_id=session_id,
+        stats=stats,
+        status="active",
+        memory_type=memory_type
+    )
+
+# Get session memory endpoint with explicit session_id
 @app.get("/api/memory/{session_id}", response_model=MemoryResponse)
 async def get_memory(session_id: str):
     if session_id not in conversation_memories:
@@ -381,6 +396,8 @@ async def analyze_image(
             # Add the user question to memory
             if memory_data:
                 memory.chat_memory.add_user_message(question)
+                # Debug log to verify message was added
+                logger.info(f"[{request_id}] Added user message to memory: '{question}'. Current message count: {len(memory.chat_memory.messages)}")
         else:
             # For the Analyze Image button without a specific question
             logger.info(f"[{request_id}] ANALYSIS MODE (general description)")
@@ -425,6 +442,8 @@ async def analyze_image(
             # Add the AI response to memory
             if memory_data:
                 memory.chat_memory.add_ai_message(analysis)
+                # Debug log to verify message was added
+                logger.info(f"[{request_id}] Added AI message to memory: '{analysis[:30]}...' Current message count: {len(memory.chat_memory.messages)}")
             
         except Exception as groq_error:
             logger.error(f"[{request_id}] Groq API error: {str(groq_error)}")
