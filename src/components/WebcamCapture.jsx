@@ -69,7 +69,7 @@ const WebcamCapture = () => {
 
     // Handler for clearing memory
     const handleClearMemory = async () => {
-        if (!sessionId) return;
+      if (!sessionId) return;
   
       setIsMemoryClearing(true);
       try {
@@ -96,7 +96,6 @@ const WebcamCapture = () => {
         setIsMemoryClearing(false);
       }
     };
-
     // Optimized video constraints based on device
     const videoConstraints = {
         width: isMobile ? { ideal: 640, max: 1280 } : { ideal: 1280, max: 1920 },
