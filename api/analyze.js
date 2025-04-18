@@ -2,6 +2,7 @@
 import { Groq } from 'groq-sdk';
 import formidable from 'formidable';
 import { readFileSync } from 'fs';
+import { v4 as uuidv4 } from 'uuid';
 
 // MEMORY STORAGE
 // In a production app, you should use a database instead of in-memory storage
@@ -60,6 +61,37 @@ const getOrCreateSession = (sessionId) => {
     sessionTimestamps[sessionId] = Date.now();
     
     return sessionId;
+};
+
+const handleClearMemory = async () => {
+  if (!sessionId) return;
+
+  setIsMemoryClearing(true);
+  try {
+    const response = await fetch(`/api/memory/${sessionId}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      setMemoryStats(data.stats);
+      console.log("Memory cleared for session:", data.session_id);
+
+      // Clear UI
+      setChatHistory([]);
+      setAnalysis('Memory cleared. Start a new conversation.');
+
+      // ✅ The magic move — clear sessionId so next message starts fresh
+      setSessionId(null); // or setSessionId(uuidv4()) if you want to control it
+    } else {
+      setError("Failed to clear memory: " + (await response.text()));
+    }
+  } catch (err) {
+    setError("Error clearing memory: " + err.message);
+  } finally {
+    setIsMemoryClearing(false);
+  }
 };
 
 // Add message to memory
