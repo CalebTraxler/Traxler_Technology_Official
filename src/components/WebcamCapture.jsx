@@ -14,19 +14,12 @@ const WebcamCapture = () => {
     const [contextPrompt, setContextPrompt] = useState('');
     const [cameraPermission, setCameraPermission] = useState(false);
     const [facingMode, setFacingMode] = useState("user");
-    
-    // Session management for memory
-    const [sessionId, setSessionId] = useState(null);
-    const [memoryCount, setMemoryCount] = useState(0);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
-    
-    // Adjust API paths based on your deployment
-    // Keep this as is for production (Vercel)
-    const API_URL = '/api';
-    // For local development you might need:
-    // const API_URL = 'http://localhost:9000/api';
+
+    // API base URL - Always use relative URL for Vercel deployments
+    const API_BASE_URL = '/api/analyze';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
@@ -37,64 +30,7 @@ const WebcamCapture = () => {
             setIsMobile(mobileRegex.test(userAgent));
         };
         checkMobile();
-        
-        // Try to fetch memory stats if session ID exists in localStorage
-        const savedSessionId = localStorage.getItem('vision_session_id');
-        if (savedSessionId) {
-            setSessionId(savedSessionId);
-            fetchMemoryStats(savedSessionId);
-        }
     }, []);
-
-    // Fetch memory stats for the current session
-    const fetchMemoryStats = async (sid = null) => {
-        const id = sid || sessionId;
-        if (!id) return;
-        
-        try {
-            console.log(`Fetching memory stats for session: ${id}`);
-            const response = await fetch(`${API_URL}/memory/${id}`);
-            
-            if (!response.ok) {
-                console.error(`Memory server error: ${response.status}`);
-                return;
-            }
-            
-            const data = await response.json();
-            console.log('Memory stats:', data);
-            if (data.messages) {
-                setMemoryCount(data.messages.length);
-            }
-        } catch (err) {
-            console.error('Error fetching memory stats:', err);
-        }
-    };
-    
-    // Clear memory for current session
-    const clearMemory = async () => {
-        if (!sessionId) return;
-        
-        try {
-            console.log(`Clearing memory for session: ${sessionId}`);
-            const response = await fetch(`${API_URL}/memory/${sessionId}`, {
-                method: 'DELETE',
-            });
-            
-            if (!response.ok) {
-                console.error(`Memory server error: ${response.status}`);
-                return;
-            }
-            
-            // Reset memory count
-            setMemoryCount(0);
-            
-            // Also reset chat history
-            setChatHistory([]);
-            setAnalysis('Memory cleared. Ready for new analysis.');
-        } catch (err) {
-            console.error('Error clearing memory:', err);
-        }
-    };
 
     // Optimized video constraints based on device
     const videoConstraints = {
@@ -180,15 +116,9 @@ const WebcamCapture = () => {
                 formData.append('question', contextPrompt);
             }
             
-            // Add session ID if available
-            if (sessionId) {
-                console.log(`Using existing session: ${sessionId}`);
-                formData.append('session_id', sessionId);
-            }
-            
             // Send to API
-            console.log("Sending image to API for analysis...");
-            const response = await fetch(`${API_URL}/analyze`, {
+            console.log("Sending image to API...");
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
@@ -199,7 +129,6 @@ const WebcamCapture = () => {
             
             // Parse response
             const data = await response.json();
-            console.log("Received API response:", data);
             
             if (data.error) {
                 throw new Error(data.error);
@@ -207,16 +136,6 @@ const WebcamCapture = () => {
             
             // Update state with analysis
             setAnalysis(data.analysis);
-            
-            // If session ID is returned, save it
-            if (data.session_id) {
-                console.log(`Received session ID: ${data.session_id}`);
-                setSessionId(data.session_id);
-                localStorage.setItem('vision_session_id', data.session_id);
-                
-                // Fetch updated memory stats
-                fetchMemoryStats(data.session_id);
-            }
             
             // Switch to chat mode
             setChatMode(true);
@@ -228,7 +147,7 @@ const WebcamCapture = () => {
         } finally {
             setLoading(false);
         }
-    }, [webcamRef, contextPrompt, dataURLtoBlob, sessionId]);
+    }, [webcamRef, contextPrompt, dataURLtoBlob]);
 
     // Function to ask question about image
     const askQuestion = useCallback(async (e) => {
@@ -256,15 +175,8 @@ const WebcamCapture = () => {
             formData.append('file', blob, 'image.jpg');
             formData.append('question', question);
             
-            // Add session ID if available
-            if (sessionId) {
-                console.log(`Using session for question: ${sessionId}`);
-                formData.append('session_id', sessionId);
-            }
-            
             // Send to API
-            console.log("Sending question to API:", question);
-            const response = await fetch(`${API_URL}/analyze`, {
+            const response = await fetch(API_BASE_URL, {
                 method: 'POST',
                 body: formData
             });
@@ -274,7 +186,6 @@ const WebcamCapture = () => {
             }
             
             const data = await response.json();
-            console.log("Received question response:", data);
             
             if (data.error) {
                 throw new Error(data.error);
@@ -286,15 +197,6 @@ const WebcamCapture = () => {
                 { question, answer: data.analysis }
             ]);
             
-            // If session ID is returned, save it
-            if (data.session_id) {
-                setSessionId(data.session_id);
-                localStorage.setItem('vision_session_id', data.session_id);
-                
-                // Fetch updated memory stats
-                fetchMemoryStats(data.session_id);
-            }
-            
             // Clear question input
             setQuestion('');
             
@@ -304,7 +206,7 @@ const WebcamCapture = () => {
         } finally {
             setLoading(false);
         }
-    }, [question, lastCapturedImage, dataURLtoBlob, sessionId]);
+    }, [question, lastCapturedImage, dataURLtoBlob]);
 
     // Reset to capture mode
     const resetToCapture = useCallback(() => {
@@ -314,7 +216,6 @@ const WebcamCapture = () => {
         setAnalysis('Waiting for analysis...');
         setError(null);
         setContextPrompt('');
-        // Note: We don't reset the session ID to maintain memory across captures
     }, []);
 
     return (
@@ -398,45 +299,28 @@ const WebcamCapture = () => {
                                                     <p className="text-sm text-blue-800">
                                                         <span className="font-medium">Powered by:</span> Llama 4 Scout 17B
                                                     </p>
-                                                    {sessionId && (
-                                                        <div className="flex justify-between items-center mt-1">
-                                                            <p className="text-xs text-blue-700">
-                                                                <span className="font-medium">Memory:</span> {memoryCount > 0 ? `${memoryCount} interactions remembered` : 'Enabled'}
-                                                            </p>
-                                                            {memoryCount > 0 && (
-                                                                <button 
-                                                                    onClick={clearMemory}
-                                                                    className="text-xs text-blue-600 hover:text-blue-800"
-                                                                >
-                                                                    Clear
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    )}
                                                 </div>
                                             </div>
 
-                                            <div className="flex gap-2">
-                                                <button
-                                                    onClick={captureAndAnalyze}
-                                                    disabled={loading || !cameraPermission}
-                                                    className="flex-1 p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
-                                                >
-                                                    {loading ? (
-                                                        <>
-                                                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                            </svg>
-                                                            Analyzing...
-                                                        </>
-                                                    ) : !cameraPermission ? (
-                                                        'Camera Initializing...'
-                                                    ) : (
-                                                        'Analyze Image'
-                                                    )}
-                                                </button>
-                                            </div>
+                                            <button
+                                                onClick={captureAndAnalyze}
+                                                disabled={loading || !cameraPermission}
+                                                className="w-full p-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-blue-300 transition shadow-md flex items-center justify-center"
+                                            >
+                                                {loading ? (
+                                                    <>
+                                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                        </svg>
+                                                        Analyzing...
+                                                    </>
+                                                ) : !cameraPermission ? (
+                                                    'Camera Initializing...'
+                                                ) : (
+                                                    'Analyze Image'
+                                                )}
+                                            </button>
                                         </>
                                     ) : (
                                         // Chat mode controls
@@ -465,23 +349,6 @@ const WebcamCapture = () => {
                                                     )}
                                                 </button>
                                             </div>
-                                            
-                                            {sessionId && (
-                                                <div className="p-3 bg-blue-50 rounded-md border border-blue-100 mb-3">
-                                                    <div className="flex items-center justify-between">
-                                                        <p className="text-xs text-blue-700">
-                                                            <span className="font-medium">Conversation Memory:</span> {memoryCount} interactions remembered
-                                                        </p>
-                                                        <button
-                                                            type="button"
-                                                            onClick={clearMemory}
-                                                            className="text-xs text-blue-600 hover:text-blue-800"
-                                                        >
-                                                            Clear Memory
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
 
                                             <button
                                                 type="button"
@@ -496,7 +363,6 @@ const WebcamCapture = () => {
                                     {error && (
                                         <div className="p-3 bg-red-50 border border-red-300 text-red-700 rounded-md">
                                             <div className="flex items-center">
-                                                <svg className="w-5 h-5 mr-2" fill="currentColor"
                                                 <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
                                                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path>
                                                 </svg>
@@ -531,25 +397,6 @@ const WebcamCapture = () => {
                                                 </div>
                                                 <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{analysis}</div>
                                             </div>
-                                            
-                                            {/* Memory indicator */}
-                                            {sessionId && memoryCount > 1 && (
-                                                <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="text-sm font-semibold text-gray-700">
-                                                            <span className="text-blue-600 mr-1">
-                                                                <svg className="inline-block w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                                                                </svg>
-                                                            </span>
-                                                            AI has memory of previous interactions
-                                                        </div>
-                                                        <div className="text-xs text-gray-500">
-                                                            {`${memoryCount} interactions in memory`}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )}
 
                                             {/* Chat messages */}
                                             {chatHistory.map((chat, index) => (
@@ -606,11 +453,11 @@ const WebcamCapture = () => {
                     <div className="bg-white p-6 rounded-xl shadow-md">
                         <div className="text-blue-600 mb-4">
                             <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
                             </svg>
                         </div>
-                        <h3 className="text-lg font-bold mb-2">Conversation Memory</h3>
-                        <p className="text-gray-600">The AI remembers previous interactions, allowing for natural follow-up questions and more context-aware responses.</p>
+                        <h3 className="text-lg font-bold mb-2">Secure Processing</h3>
+                        <p className="text-gray-600">Your images are processed securely with our enterprise-grade API infrastructure, ensuring privacy and data protection.</p>
                     </div>
                 </div>
 
@@ -632,16 +479,16 @@ const WebcamCapture = () => {
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">4</div>
-                            <p>Ask follow-up questions about the image</p>
+                            <p>Ask specific questions about the image</p>
                         </div>
                         <div className="text-center">
                             <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 text-blue-800 mx-auto mb-3 font-bold">5</div>
-                            <p>AI remembers context from previous questions</p>
+                            <p>Click "Capture New Image" to restart</p>
                         </div>
                     </div>
                     <div className="mt-6 text-center">
                         <p className="inline-block py-2 px-4 bg-blue-50 text-blue-700 rounded-full font-medium">
-                            Powered by Llama 4 Scout 17B with memory for advanced image analysis
+                            Powered by Llama 4 Scout 17B for advanced image analysis
                         </p>
                     </div>
                 </div>
