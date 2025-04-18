@@ -14,22 +14,12 @@ const WebcamCapture = () => {
     const [contextPrompt, setContextPrompt] = useState('');
     const [cameraPermission, setCameraPermission] = useState(false);
     const [facingMode, setFacingMode] = useState("user");
-    
-    // Memory-related state
-    const [sessionId, setSessionId] = useState(null);
-    const [memoryStats, setMemoryStats] = useState({
-        message_count: 0,
-        characters: 0,
-        tokens_estimate: 0
-    });
-    const [isMemoryClearing, setIsMemoryClearing] = useState(false);
 
     // Using only the Llama 4 Scout model
     const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
     // API base URL - Always use relative URL for Vercel deployments
     const API_BASE_URL = '/api/analyze';
-    const MEMORY_API_URL = '/api/memory';
 
     // Detect if running on mobile
     const [isMobile, setIsMobile] = useState(false);
@@ -41,55 +31,6 @@ const WebcamCapture = () => {
         };
         checkMobile();
     }, []);
-
-    // Fetch session and memory info on component mount
-    useEffect(() => {
-        const fetchMemoryStats = async () => {
-            try {
-                const response = await fetch(MEMORY_API_URL);
-                if (response.ok) {
-                    const data = await response.json();
-                    setSessionId(data.session_id);
-                    setMemoryStats(data.stats);
-                    console.log("Session initialized:", data.session_id);
-                } else {
-                    console.error("Failed to fetch memory stats:", await response.text());
-                }
-            } catch (err) {
-                console.error("Error fetching memory stats:", err);
-            }
-        };
-        
-        fetchMemoryStats();
-    }, []);
-
-    // Handler for clearing memory
-    const handleClearMemory = async () => {
-        if (!sessionId) return;
-        
-        setIsMemoryClearing(true);
-        try {
-            const response = await fetch(MEMORY_API_URL, {
-                method: 'DELETE',
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                setMemoryStats(data.stats);
-                console.log("Memory cleared for session:", data.session_id);
-                
-                // Also clear chat history in the UI
-                setChatHistory([]);
-                setAnalysis('Memory cleared. Start a new conversation.');
-            } else {
-                setError("Failed to clear memory: " + (await response.text()));
-            }
-        } catch (err) {
-            setError("Error clearing memory: " + err.message);
-        } finally {
-            setIsMemoryClearing(false);
-        }
-    };
 
     // Optimized video constraints based on device
     const videoConstraints = {
@@ -179,8 +120,7 @@ const WebcamCapture = () => {
             console.log("Sending image to API...");
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
-                body: formData,
-                credentials: 'include'  // Important for cookies
+                body: formData
             });
             
             if (!response.ok) {
@@ -197,28 +137,9 @@ const WebcamCapture = () => {
             // Update state with analysis
             setAnalysis(data.analysis);
             
-            // Update session and memory stats if provided
-            if (data.session_id) {
-                setSessionId(data.session_id);
-            }
-            
-            if (data.memory_stats) {
-                setMemoryStats(data.memory_stats);
-            }
-            
             // Switch to chat mode
             setChatMode(true);
-            
-            // Initialize chat history with the first analysis 
-            if (contextPrompt.trim()) {
-                setChatHistory([{ 
-                    type: 'context',
-                    prompt: contextPrompt,
-                    answer: data.analysis 
-                }]);
-            } else {
-                setChatHistory([]);
-            }
+            setChatHistory([]);
             
         } catch (err) {
             console.error("Error in captureAndAnalyze:", err);
@@ -226,7 +147,7 @@ const WebcamCapture = () => {
         } finally {
             setLoading(false);
         }
-    }, [webcamRef, contextPrompt, dataURLtoBlob, API_BASE_URL]);
+    }, [webcamRef, contextPrompt, dataURLtoBlob]);
 
     // Function to ask question about image
     const askQuestion = useCallback(async (e) => {
@@ -254,11 +175,10 @@ const WebcamCapture = () => {
             formData.append('file', blob, 'image.jpg');
             formData.append('question', question);
             
-            // Send to API with credentials for session cookies
+            // Send to API
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
-                body: formData,
-                credentials: 'include'
+                body: formData
             });
             
             if (!response.ok) {
@@ -271,19 +191,10 @@ const WebcamCapture = () => {
                 throw new Error(data.error);
             }
             
-            // Update session and memory stats if provided
-            if (data.session_id) {
-                setSessionId(data.session_id);
-            }
-            
-            if (data.memory_stats) {
-                setMemoryStats(data.memory_stats);
-            }
-            
             // Add to chat history
             setChatHistory(prev => [
                 ...prev,
-                { type: 'qa', question, answer: data.analysis }
+                { question, answer: data.analysis }
             ]);
             
             // Clear question input
@@ -295,7 +206,7 @@ const WebcamCapture = () => {
         } finally {
             setLoading(false);
         }
-    }, [question, lastCapturedImage, dataURLtoBlob, API_BASE_URL]);
+    }, [question, lastCapturedImage, dataURLtoBlob]);
 
     // Reset to capture mode
     const resetToCapture = useCallback(() => {
@@ -305,13 +216,7 @@ const WebcamCapture = () => {
         setAnalysis('Waiting for analysis...');
         setError(null);
         setContextPrompt('');
-        // Note: We don't clear the memory/session when resetting to capture mode
     }, []);
-
-    // Format token count for display
-    const formatNumber = (num) => {
-        return new Intl.NumberFormat().format(num);
-    };
 
     return (
         <div className="bg-gray-50">
@@ -320,13 +225,8 @@ const WebcamCapture = () => {
                 <div className="max-w-6xl mx-auto px-4 text-center">
                     <h1 className="text-4xl font-bold mb-4">Vision AI Platform</h1>
                     <p className="text-xl mb-8 max-w-3xl mx-auto">
-                        Experience real-time image analysis powered by cutting-edge AI with conversation memory.
+                        Experience real-time image analysis powered by cutting-edge AI. Capture, analyze, and interact with visual content instantly.
                     </p>
-                    {sessionId && (
-                        <div className="inline-flex bg-blue-800 px-4 py-2 rounded-full text-xs font-medium">
-                            Session ID: {sessionId.substring(0, 8)}...
-                        </div>
-                    )}
                 </div>
             </section>
 
@@ -397,7 +297,7 @@ const WebcamCapture = () => {
                                             <div className="mb-3">
                                                 <div className="p-3 bg-blue-50 rounded-md border border-blue-100">
                                                     <p className="text-sm text-blue-800">
-                                                        <span className="font-medium">Powered by:</span> Llama 4 Scout 17B with Conversation Memory
+                                                        <span className="font-medium">Powered by:</span> Llama 4 Scout 17B
                                                     </p>
                                                 </div>
                                             </div>
@@ -450,49 +350,17 @@ const WebcamCapture = () => {
                                                 </button>
                                             </div>
 
-                                            <div className="flex gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={resetToCapture}
-                                                    className="flex-1 p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
-                                                >
-                                                    Capture New Image
-                                                </button>
-                                                
-                                                <button
-                                                    type="button"
-                                                    onClick={handleClearMemory}
-                                                    disabled={isMemoryClearing || memoryStats.message_count === 0}
-                                                    className="flex-1 p-3 bg-red-100 text-red-700 rounded-md hover:bg-red-200 disabled:bg-gray-100 disabled:text-gray-400 transition shadow-sm flex items-center justify-center"
-                                                >
-                                                    {isMemoryClearing ? (
-                                                        <svg className="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                        </svg>
-                                                    ) : (
-                                                        <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                                        </svg>
-                                                    )}
-                                                    Clear Memory
-                                                </button>
-                                            </div>
-                                            
-                                            {error && (
-                                                <div className="p-3 bg-red-50 border border-red-300 text-red-700 rounded-md">
-                                                    <div className="flex items-center">
-                                                        <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                                                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path>
-                                                        </svg>
-                                                        {error}
-                                                    </div>
-                                                </div>
-                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={resetToCapture}
+                                                className="w-full p-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition shadow-sm"
+                                            >
+                                                Capture New Image
+                                            </button>
                                         </form>
                                     )}
 
-                                    {!chatMode && error && (
+                                    {error && (
                                         <div className="p-3 bg-red-50 border border-red-300 text-red-700 rounded-md">
                                             <div className="flex items-center">
                                                 <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
@@ -507,62 +375,31 @@ const WebcamCapture = () => {
 
                             {/* Right column - Results */}
                             <div className="md:w-1/2">
-                                {/* Memory stats display - always visible */}
-                                <div className="mb-4 flex justify-between items-center">
-                                    <h2 className="text-xl font-bold text-blue-900">
-                                        {!chatMode ? "Analysis Results" : "Conversation"}
-                                    </h2>
-                                    
-                                    {/* Memory status indicator */}
-                                    <div className="flex items-center bg-gray-100 py-1 px-3 rounded-full text-xs">
-                                        <div className={`w-2 h-2 rounded-full mr-2 ${memoryStats.message_count > 0 ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-                                        <div className="flex flex-col">
-                                            <span className="font-medium">Memory: {memoryStats.message_count} messages</span>
-                                            <span className="text-gray-500">{formatNumber(memoryStats.tokens_estimate)} tokens (est.)</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                
                                 {!chatMode ? (
                                     // Analysis results
                                     <>
+                                        <h2 className="text-xl font-bold text-blue-900 mb-4">Analysis Results</h2>
                                         <div className="bg-gray-50 p-5 rounded-lg h-64 overflow-y-auto whitespace-pre-line border border-gray-200 shadow-inner">
                                             {analysis}
                                         </div>
                                     </>
                                 ) : (
-                                    // Chat history with memory context
+                                    // Chat history
                                     <>
+                                        <h2 className="text-xl font-bold text-blue-900 mb-4">Conversation</h2>
                                         <div className="bg-gray-50 p-5 rounded-lg h-96 overflow-y-auto border border-gray-200 shadow-inner">
-                                            {/* Memory indicator */}
-                                            {memoryStats.message_count > 0 && (
-                                                <div className="mb-4 p-2 bg-blue-50 border border-blue-100 rounded-md">
-                                                    <p className="text-xs text-blue-700 flex items-center">
-                                                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                                        </svg>
-                                                        AI has memory of this conversation ({memoryStats.message_count} messages)
-                                                    </p>
-                                                </div>
-                                            )}
-                                        
                                             {/* Initial analysis */}
-                                            {chatHistory.length > 0 && chatHistory[0].type === 'context' ? (
-                                                <div className="mb-6">
-                                                    <div className="font-semibold text-blue-700 mb-2">
-                                                        <span>AI Response to: <i>"{chatHistory[0].prompt}"</i></span>
-                                                    </div>
-                                                    <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{chatHistory[0].answer}</div>
+                                            <div className="mb-6">
+                                                <div className="font-semibold text-blue-700 mb-2">
+                                                    {contextPrompt
+                                                        ? <span>AI Response to: <i>"{contextPrompt}"</i></span>
+                                                        : "AI Analysis:"}
                                                 </div>
-                                            ) : (
-                                                <div className="mb-6">
-                                                    <div className="font-semibold text-blue-700 mb-2">AI Analysis:</div>
-                                                    <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{analysis}</div>
-                                                </div>
-                                            )}
+                                                <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">{analysis}</div>
+                                            </div>
 
                                             {/* Chat messages */}
-                                            {chatHistory.filter(chat => chat.type === 'qa').map((chat, index) => (
+                                            {chatHistory.map((chat, index) => (
                                                 <div key={index} className="mb-6">
                                                     <div className="font-semibold text-gray-700 mb-2">You asked:</div>
                                                     <div className="bg-gray-100 p-3 rounded-lg mb-3">{chat.question}</div>
