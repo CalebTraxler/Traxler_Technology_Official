@@ -70,30 +70,31 @@ const WebcamCapture = () => {
     // Handler for clearing memory
     const handleClearMemory = async () => {
         if (!sessionId) return;
-        
-        setIsMemoryClearing(true);
-        try {
-            const response = await fetch(`${MEMORY_API_URL}/${sessionId}`, {
-                method: 'DELETE',
-                credentials: 'include'  // For cookies
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                setMemoryStats(data.stats);
-                console.log("Memory cleared for session:", data.session_id);
-                
-                // Also clear chat history in the UI
-                setChatHistory([]);
-                setAnalysis('Memory cleared. Start a new conversation.');
-            } else {
-                setError("Failed to clear memory: " + (await response.text()));
-            }
-        } catch (err) {
-            setError("Error clearing memory: " + err.message);
-        } finally {
-            setIsMemoryClearing(false);
+  
+      setIsMemoryClearing(true);
+      try {
+        // Make sure this URL is correctly constructed
+        const response = await fetch(`/api/memory/${sessionId}`, {
+          method: 'DELETE',
+          credentials: 'include'  // For cookies
+        });
+    
+        if (response.ok) {
+          const data = await response.json();
+          setMemoryStats(data.stats);
+          console.log("Memory cleared for session:", data.session_id);
+      
+          // Also clear chat history in the UI
+          setChatHistory([]);
+          setAnalysis('Memory cleared. Start a new conversation.');
+        } else {
+          setError("Failed to clear memory: " + (await response.text()));
         }
+      } catch (err) {
+        setError("Error clearing memory: " + err.message);
+      } finally {
+        setIsMemoryClearing(false);
+      }
     };
 
     // Optimized video constraints based on device
