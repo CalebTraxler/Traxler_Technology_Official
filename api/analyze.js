@@ -177,17 +177,10 @@ export async function memoryHandler(req, res) {
     
     // If this is a DELETE request, clear the memory
     if (req.method === 'DELETE') {
-      if (!sessionId) {
-        console.warn("No sessionId found during DELETE");
-        return res.status(400).json({ error: 'No sessionId provided' });
-      }
-
-      if (!conversationMemories[sessionId]) {
-        console.warn("Session not found in memory:", sessionId);
+      if (!sessionId || !conversationMemories[sessionId]) {
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      // 🧼 clear the memory
       conversationMemories[sessionId] = { messages: [] };
       console.log(`Cleared memory for session ${sessionId}`);
 
