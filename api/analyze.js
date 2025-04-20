@@ -2,7 +2,6 @@
 import { Groq } from 'groq-sdk';
 import formidable from 'formidable';
 import { readFileSync } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
 
 // MEMORY STORAGE
 // In a production app, you should use a database instead of in-memory storage
@@ -61,37 +60,6 @@ const getOrCreateSession = (sessionId) => {
     sessionTimestamps[sessionId] = Date.now();
     
     return sessionId;
-};
-
-const handleClearMemory = async () => {
-  if (!sessionId) return;
-
-  setIsMemoryClearing(true);
-  try {
-    const response = await fetch(`/api/memory/${sessionId}`, {
-      method: 'DELETE',
-      credentials: 'include'
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      setMemoryStats(data.stats);
-      console.log("Memory cleared for session:", data.session_id);
-
-      // Clear UI
-      setChatHistory([]);
-      setAnalysis('Memory cleared. Start a new conversation.');
-
-      // ✅ The magic move — clear sessionId so next message starts fresh
-      setSessionId(null); // or setSessionId(uuidv4()) if you want to control it
-    } else {
-      setError("Failed to clear memory: " + (await response.text()));
-    }
-  } catch (err) {
-    setError("Error clearing memory: " + err.message);
-  } finally {
-    setIsMemoryClearing(false);
-  }
 };
 
 // Add message to memory
@@ -159,45 +127,37 @@ export async function memoryHandler(req, res) {
         return acc;
     }, {}) || {};
     
-    // Get session ID from various sources
     let sessionId = cookies.session_id;
     
-    // Check for session_id in query params or path
+    // Check for session_id in query params
     if (req.query.session_id) {
         sessionId = req.query.session_id;
-    } else if (req.url) {
-        // Extract session_id from path if in format /api/memory/[session_id]
-        const pathMatch = req.url.match(/\/api\/memory\/([^\/]+)/);
-        if (pathMatch && pathMatch[1]) {
-            sessionId = pathMatch[1];
-        }
     }
-    
-    console.log(`Memory handler processing request for session: ${sessionId}`);
     
     // If this is a DELETE request, clear the memory
     if (req.method === 'DELETE') {
-      if (!sessionId || !conversationMemories[sessionId]) {
-        return res.status(404).json({ error: 'Session not found' });
-      }
-
-      conversationMemories[sessionId] = { messages: [] };
-      console.log(`Cleared memory for session ${sessionId}`);
-
-      const stats = getMemoryStats(sessionId);
-      return res.status(200).json({
-        session_id: sessionId,
-        stats: stats,
-        status: 'cleared',
-        memory_type: 'buffer'
-      });
+        if (!sessionId || !conversationMemories[sessionId]) {
+            return res.status(404).json({
+                error: 'Session not found'
+            });
+        }
+        
+        conversationMemories[sessionId] = { messages: [] };
+        console.log(`Cleared memory for session ${sessionId}`);
+        
+        const stats = getMemoryStats(sessionId);
+        return res.status(200).json({
+            session_id: sessionId,
+            stats: stats,
+            status: 'cleared'
+        });
     }
 
     // For GET requests, get or create a session
     sessionId = getOrCreateSession(sessionId);
     
     // Set the session cookie
-    res.setHeader('Set-Cookie', `session_id=${sessionId}; Max-Age=${SESSION_EXPIRY_SECONDS}; Path=/; HttpOnly; SameSite=Lax`);
+    res.setHeader('Set-Cookie', `session_id=${sessionId}; Max-Age=${SESSION_EXPIRY_SECONDS}; Path=/; HttpOnly`);
     
     const stats = getMemoryStats(sessionId);
     return res.status(200).json({
@@ -249,20 +209,11 @@ export default async function handler(req, res) {
         const question = fields.question;
         
         // Get session ID from cookie or form
-        let sessionId;
-        
-        // Parse cookies
-        const cookies = req.headers.cookie?.split(';').reduce((acc, cookie) => {
-            const [key, value] = cookie.trim().split('=');
-            acc[key] = value;
-            return acc;
-        }, {}) || {};
-        
-        sessionId = cookies.session_id || fields.session_id;
+        let sessionId = req.cookies?.session_id || fields.session_id;
         sessionId = getOrCreateSession(sessionId);
         
         // Set the session cookie
-        res.setHeader('Set-Cookie', `session_id=${sessionId}; Max-Age=${SESSION_EXPIRY_SECONDS}; Path=/; HttpOnly; SameSite=Lax`);
+        res.setHeader('Set-Cookie', `session_id=${sessionId}; Max-Age=${SESSION_EXPIRY_SECONDS}; Path=/; HttpOnly`);
 
         if (!file) {
             return res.status(400).json({ error: 'No image file provided' });
@@ -279,19 +230,18 @@ export default async function handler(req, res) {
         // Get conversation history from memory
         let memoryContext = "";
         if (conversationMemories[sessionId] && conversationMemories[sessionId].messages.length > 0) {
-            // Format the memory context more explicitly to ensure model uses it
-            memoryContext = "\n\nIMPORTANT CONVERSATION HISTORY (Reference this to answer user questions):\n";
-            conversationMemories[sessionId].messages.forEach((msg, index) => {
-                memoryContext += `[${index + 1}] ${msg.role}: ${msg.content}\n`;
+            const recentMessages = conversationMemories[sessionId].messages.slice(-5);
+            memoryContext = "\nRecent conversation history:\n";
+            recentMessages.forEach(msg => {
+                memoryContext += `${msg.role}: ${msg.content}\n`;
             });
-            console.log("Adding memory context with " + conversationMemories[sessionId].messages.length + " messages");
         }
 
-        // Create a more explicit instruction to use the memory context
+        // Prepare the prompt based on whether a question was asked
         let userPrompt;
         if (question) {
             console.log(`QUESTION MODE: '${question}'`);
-            userPrompt = `Question about this image: ${question}\n\nUse both the image AND the conversation history below to answer the question. If information was provided in earlier messages, use that information in your answer.${memoryContext}\n\nPlease respond concisely but completely.`;
+            userPrompt = `Question about this image: ${question}\nPlease respond concisely but completely.${memoryContext}`;
             
             // Add user question to memory
             addMessageToMemory(sessionId, 'user', question);
